@@ -1,0 +1,1156 @@
+*dk convectadjoint
+	subroutine convectadjoint(tstepadj,iadj,itforw)
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+	
+	common /flds/ f((nt+1)**2*nd*(nr+1),8)
+	common /velo/ upb(nt+1), u((nt+1)**2,nd,3,nr+1),  upe(nt+1)
+	common /temp/ tpb(nt+1), temp((nt+1)**2,nd,nr+1), tpe(nt+1)
+	common /pres/ ppb(nt+1), pres((nt+1)**2,nd,nr+1), ppe(nt+1)
+	common /mesh/ xn((nt+1)**2,nd,3)
+	common /radl/ rshl(nr+1), ird
+	common /ndar/ arn((nt+1)**2),  arne((nt+1)**2),
+     &              rarn((nt+1)**2), rarne((nt+1)**2)
+	common /work/ wk((nt+1)**2,(nr+1)*2)
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /conv/ step0, stepmin, stepmax
+	common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+	common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+	common /mgrd/ itlimit, convtol, itsolve
+	common /vis1/ vscmax, rvscscl, tvscscl, pwrlawn, pwrlawsr, yldstrs
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+	common /solv/ itreq, convrg, divnorm, cutdiv
+	common /call/ ncall
+	common /prty/ propr(20)
+	common /name/ titl(4,4)
+	common /fnam/ vname, sname, cname
+	common /clck/ itmng, sec(50)
+
+	integer iter, iadj, itforw, ncall, ibc0
+	real tb01, tb02, a, tstepadj(itmax+1)
+	character*8 titl, vname, sname, cname
+
+	call mytime(tin)
+	call nulvec(sec,50)
+
+	ncall = 0
+	a = randomnum(-1)
+	time=tstepadj(itforw+1)
+
+!	The adjoint velocity boundary conditions are no-slip on the
+!	outer surface and free-slip on the inner boundary for the adjoint
+!	backward integration. The adjoint temperature boundary conditions
+!	are always zero on both boundaries. While we store the BC for the 
+!	forward run, here we define new "adjoint" BC for the adjoint run.
+	ibc0	= 5
+	tb01  = tb(1)
+	tb02  = tb(2)
+	tb(1) = 0.0
+	tb(2) = 0.0
+
+	call opinit
+	call eosset
+      
+!	Peter: Use the residual temperature field at the end of the forward
+!	run as the initial condition of the adjoint backward integration.
+	call diffin
+
+!	Begin main time step loop.
+!	We need to define the number of backward timesteps based on the 
+!	actual number of timesteps we took in the forward run. This info
+!	from the forward run is stored in the 'itforw' variable.
+	do iter=itforw,1,-1
+
+		tstep=tstepadj(iter)
+		if(mynum==0) then
+			write(6,*) iter, time/1000000.0,
+     &			3.1688e-8*tstep/1000000.0
+   			write(8,*) iter, time/1000000.0,
+     &			3.1688e-8*tstep/1000000.0
+     		endif
+
+		call advanceadjoint(tstep,iter,ibc0)
+
+!	Peter: Reverse time calculation for backward integration.
+		time  = time  - 3.1688e-8*tstep
+		propr(2) = time			
+	enddo
+
+!	Peter: Write the adjoint temperature, i.e. the gradient of
+!	the cost function at the end of the adjoint integration
+!	and update the initial temperature field
+	call adjointout(iadj)
+	call perturbinitadjoint(iadj,iter)
+	
+	call mytime(tout)
+	sec(3) = sec(3) + tout - tin
+
+!	Peter: Set velocity and temperature boundary conditions back to 
+!	their original value for use in the next iteration forward run.
+	tb(1)= tb01
+	tb(2)= tb02
+	
+	end subroutine
+
+
+*dk advanceadjoint
+	subroutine advanceadjoint(tstep,iter,ibc0)
+!	This routine advances the adjoint Navier-Stokes 
+!	equations one time step back in time.
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+
+	common /flds/ f((nt+1)**2*nd*(nr+1),8)
+	common /temp/ tpb(nt+1), temp((nt+1)**2*nd*(nr+1)), tpe(nt+1)
+	common /shht/ shb(nt+1),  shr((nt+1)**2*nd*(nr+1)), she(nt+1)
+	common /tdot/ tdb(nt+1), tdot((nt+1)**2*nd*(nr+1),2), tde(nt+1)
+	common /velo/ upb(nt+1), u((nt+1)**2*nd*3*(nr+1)),  upe(nt+1)
+	common /conv/ step0, stepmin, stepmax
+	common /nrms/ fnrm, rnrm, unrm, ekin
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+	common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+	common /radl/ rshl(nr+1), ird
+	common /solv/ itreq, convrg, divnorm, cutdiv
+	common /mgrd/ itlimit, convtol, lreport, itsolve, izerou
+	common /call/ ncall
+	common /clck/ itmng, sec(50)
+
+	integer iter, ibc0
+	real fu(3*nv), ftemp(nv), tstep
+
+	if(itmng==1) call mytime(tin)
+
+	msgnum = 1
+	ncall=ncall+1
+
+!	Peter: Read forward temperature and velocity field.
+	call forwardin(fu,ftemp,iter)
+
+!	Update the viscosity variation field.
+	call oprupdate(ibc0)
+
+!	Update the shear heating rate if appropriate.
+	if(ieos>=10.and.mod(ncall,4)==1) call shrheat(shr,u,f,f(1,3))
+
+!	Use a second-order Runge-Kutta scheme to update the temperature.
+!	Peter: Use modified momentum and energy routines for backward run.
+	call usolveadjoint(ftemp,ibc0)
+	call energyadjoint(fu,tdot(1,1))
+
+!	Peter: Reverse the time-stepping for the backward integration.
+	do ii=1,nv
+		temp(ii) = temp(ii) - 0.5*tstep*tdot(ii,1)
+	enddo
+
+	call usolveadjoint(ftemp,ibc0)
+	call energyadjoint(fu,tdot(1,2))
+
+	do ii=1,nv
+		temp(ii) = temp(ii) - tstep*(tdot(ii,2) - 0.5*tdot(ii,1))
+	enddo
+
+!	Compute norms and check energy conservation.
+	if(mod(ncall,10)==0) then
+		call norm3s(u,unrm,3,nd,nr,nt)
+		call kenergy(ekin,u)
+		call layrav(temp,tav)
+		call heating(heat,hrad,tdot(1,2))
+		tnrm = smean(temp)
+		hnet = htop - hbot + heat - hrad
+		do ir=1,nr
+			qc(ir) = 12.56637*(tav(ir+1) - tav(ir))*rshl(ir)*rshl(ir+1)
+     &			*sqrt(cond(ir)*cond(ir+1))/(rshl(ir) - rshl(ir+1))
+		enddo
+	endif
+
+	if(ncall==1) call norm3s(u,unrm,3,nd,nr,nt)
+      
+	if(itmng==1) then
+		call mytime(tout)
+		sec(4) = sec(4) + tout - tin
+	endif
+	     
+	end subroutine
+
+
+*dk usolveadjoint
+	subroutine usolveadjoint(ftemp,ibc0)
+!	This routine solves for the new velocity field u.
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+      
+	common /flds/ f((nt+1)**2*nd,3,nr+1), r((nt+1)**2*nd,nr+1),
+     &              v((nt+1)**2*nd,3,nr+1), s((nt+1)**2*nd,nr+1)
+	common /mgwk/ w((nt+1)**2*nd,nr+1,5)
+	common /temp/ tpb(nt+1), temp((nt+1)**2*nd*(nr+1)), tpe(nt+1)
+	common /velo/ upb(nt+1), u((nt+1)**2*nd,3,nr+1),  upe(nt+1)
+	common /pres/ ppb(nt+1), pres((nt+1)**2*nd,nr+1), ppe(nt+1)
+	common /mesh/ xn((nt+1)**2*nd,3)
+	common /radl/ rshl(nr+1), ird
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /vis1/ vscmax, rvscscl, tvscscl, pwrlawn, pwrlawsr, yldstrs
+	common /vis2/ rdvsc(129), tactv(129), vscl(129)
+	common /nrms/ fnrm, rnrm, unrm, ekin
+	common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+	common /mgrd/ itlimit, convtol, itsolve
+	common /opwt/ wd, wm
+	common /solv/ itreq, convrg, divnorm, cutdiv
+	common /clck/ itmng, sec(50)
+
+	integer ibc0, map(0:nt,nt+1,nd)
+	integer itr, izerou
+	real ftemp(nv), urot(3,pl_size)
+	real divnorm, cutdiv
+
+	map=0
+	urot=0.0
+	if(itmng==1) call mytime(tin)
+
+!	Compute the nodal force field f.
+	call forcesadjoint(ftemp)
+
+!	Solve for an estimate of the new velocity field.
+	wd = 1.0
+	wm	= 0.0
+ 
+	if(vscmax>0.0) call uscale(u,1,nr)
+
+	! calculates u from f (Au=f)
+	! input u here serves as a first guess
+	call multigrid(u,f,3,map,urot,ibc0,0)
+
+	if(vscmax>0.0) call uscale(u,2,nr)
+
+	velnrm  = unrm
+	fnrm0   = fnrm
+	rnrm0   = rnrm
+	convrg  = rnrm/fnrm
+	cutdiv  = 8.0*(rdvsc(1)**0.25)*convtol*unrm/rshl(1)
+	! itsolve: number of multigrid iterations needed
+	! has influence on the next time step
+	itreq   = itsolve
+
+	itr=1
+	izerou=1
+	divnorm=cutdiv
+
+	! pressure correction
+	do while(itr<=npres_adj.and.divnorm>=cutdiv)
+
+		if(itr==1) then
+ 
+			call divergence(r,w,u,w(1,1,2),w(1,1,5),w,1)
+
+			call norm3s(r,divnorm,1,nd,nr,nt)
+ 
+			if(divnorm>=cutdiv) then
+				do ir=1,nr+1
+					do ii=1,(nt+1)**2*nd
+						s(ii,ir) = r(ii,ir)
+					enddo
+				enddo
+			endif
+			
+		else
+
+			delta = (divnorm/divnorm0)**2.
+			do ir=1,nr+1
+				do ii=1,(nt+1)**2*nd
+					s(ii,ir) = r(ii,ir) + delta*s(ii,ir)
+				enddo
+			enddo
+ 
+		endif
+
+		if(divnorm>=cutdiv) then
+
+			call gradient(f,s)
+ 
+			if(vscmax>0.0) call uscale(f,2,nr)
+ 
+			do ir=1,nr+1
+				a1 = rhorf(ir)/rho0
+				do ii=1,(nt+1)**2*nd
+					f(ii,1,ir) = a1*f(ii,1,ir)
+					f(ii,2,ir) = a1*f(ii,2,ir)
+					f(ii,3,ir) = a1*f(ii,3,ir)
+				enddo
+			enddo
+ 
+			call nulvec(v, (nt+1)**2*3*nd*(nr+1))
+
+			call multigrid(v,f,3,map,urot,ibc0,izerou)
+			izerou=0
+
+			if(vscmax>0.0) call uscale(v,2,nr)			
+
+			call divergence(w(1,1,2),w,v,w(1,1,2),w(1,1,5),w,1)
+			call dotprod(a0,w(1,1,2),s)
+ 
+			if(a0/=0.0) a0 = -divnorm**2/a0
+			a1 = a0*visc
+ 
+			do ir=1,nr+1
+				do ii=1,(nt+1)**2*nd
+					r(ii,ir)    = r(ii,ir)    + a0*w(ii,ir,2)
+					pres(ii,ir) = pres(ii,ir) + a1*s(ii,ir)
+					u(ii,1,ir)  = u(ii,1,ir)  + a0*v(ii,1,ir)
+					u(ii,2,ir)  = u(ii,2,ir)  + a0*v(ii,2,ir)
+					u(ii,3,ir)  = u(ii,3,ir)  + a0*v(ii,3,ir)
+				enddo
+			enddo
+
+			divnorm0 = divnorm
+ 
+			call norm3s(r,divnorm,1,nd,nr,nt)
+ 
+		endif
+		
+		itr=itr+1
+	enddo
+
+	unrm = velnrm
+	fnrm = fnrm0
+	rnrm = rnrm0
+
+	if(itmng==1) then
+		call mytime(tout)
+		sec(5) = sec(5) + tout - tin
+	endif
+	
+	end subroutine
+            
+
+*dk forcesadjoint
+	subroutine forcesadjoint(ftemp)
+
+	include 'size.h'
+
+	common /flds/ f((nt+1)**2*nd,3,nr+1), b((nt+1)**2*nd,nr+1),
+     &              w((nt+1)**2*nd,4,nr+1)
+	common /velo/ upb(nt+1), u((nt+1)**2*nd,3,nr+1),  upe(nt+1)
+	common /pres/ ppb(nt+1), pres((nt+1)**2*nd,nr+1), ppe(nt+1)
+	common /temp/ tpb(nt+1), temp((nt+1)**2*nd,(nr+1)), tpe(nt+1)
+	common /mesh/ xn((nt+1)**2*nd,3)
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+	common /vis1/ vscmax, rvscscl, tvscscl, pwrlawn, pwrlawsr, yldstrs
+	common /clck/ itmng, sec(50)
+
+	real ftemp(nv)
+
+	if(itmng==1) call mytime(tin)
+
+!	Compute gradient 'w' of the forward temperature field 'ftemp'
+!	This will be the 'adjoint-buoyancy' term.
+	call gradient(w,ftemp)
+
+!	Compute the gradient of the 'adjoint-pressure'.
+	call gradient(f,pres)
+
+	do ir=1,nr+1
+		aa = rhorf(ir)/rho0
+!	Peter: Add the adjoint momentum-forcing term (which comes from the
+!	adjoint temperature times the gradient of forward temperature) to
+!	the gradient of the 'adjoint-pressure'. (Previously this loop 
+!	added the buoyancy term to the pressure gradient)
+		do ii=1,(nt+1)**2*nd
+			f(ii,1,ir) = aa*f(ii,1,ir) + w(ii,1,ir)*temp(ii,ir)
+			f(ii,2,ir) = aa*f(ii,2,ir) + w(ii,2,ir)*temp(ii,ir)
+			f(ii,3,ir) = aa*f(ii,3,ir) + w(ii,3,ir)*temp(ii,ir)
+		enddo
+	enddo
+
+	if(vscmax>0.0) call uscale(f,2,nr)
+	aa = 1.0/visc
+	do ir=1,nr+1
+		do ii=1,(nt+1)**2*nd
+			f(ii,1,ir) = aa*f(ii,1,ir)
+			f(ii,2,ir) = aa*f(ii,2,ir)
+			f(ii,3,ir) = aa*f(ii,3,ir)
+		enddo
+	enddo
+
+	if(itmng==1) then
+		call mytime(tout)
+		sec(15) = sec(15) + tout - tin
+	endif
+
+	end subroutine
+      
+      
+*dk energyadjoint
+	subroutine energyadjoint(fu,dhdt)
+!	This routine updates the temperature field.
+
+	include 'size.h'
+	include 'pcom.h'
+
+	common /flds/ f((nt+1)**2,nd,nr+1,8)
+	common /temp/ tpb(nt+1), temp((nt+1)**2,nd,nr+1), tpe(nt+1)
+	common /velo/ upb(nt+1), u((nt+1)**2,nd,3,nr+1),  upe(nt+1)
+	common /shht/ shb(nt+1),  shr((nt+1)**2,nd,nr+1), she(nt+1)
+	common /volm/ vol((nt+1)**2,nr+1,2)
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+	common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+	common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+	common /conv/ step0, stepmin, stepmax
+	common /mesh/ xn((nt+1)**2,nd,3)
+	common /volc/ tmpmlt
+	common /call/ ncall
+	common /clck/ itmng, sec(50)
+
+	real dhdt((nt+1)**2,nd,nr+1)
+	real fu(3*nv)
+
+	if(itmng==1) call mytime(tin)
+
+	if(ncall==1) call facegen(f)
+
+!	Compute the rate of temperature change due to advection and
+!	conduction.
+	call advectadjoint(fu,dhdt)
+
+!	Peter: Include the adjoint-energy source term, which consists of the
+!	product of 'adjoint-velocities' and a buoyancy term without temperature.
+!	In other words, this term is derived from the forward-buoyancy term.
+	do ir=1,nr+1
+		do id=1,nd
+			do ii=1,(nt+1)**2 
+				dhdt(ii,id,ir) = dhdt(ii,id,ir) + alpha(ir)*grv(ir)*rhorf(ir)
+     &			* (u(ii,id,1,ir)*xn(ii,id,1) + u(ii,id,2,ir)*xn(ii,id,2)
+     &				+ u(ii,id,3,ir)*xn(ii,id,3))
+			enddo
+		enddo
+	enddo
+
+	htop = 0.0
+	hbot = 0.0
+
+!	Use heating rate of the nodal boundary layers as proxy for
+!	the heat flux leaving or entering the shell.
+	do id=1,nd
+
+		do ii=1,(nt+1)**2
+			htop = htop + dhdt(ii,id,1)*vol(ii,1,1)
+			dhdt(ii,id,1) = 0.
+		enddo
+
+!	Peter: Always enforce adjoint temperature boundary conditions (rather
+!	than adjoint temperature flux boundary conditions) on the adjoint
+!	temperature both at the top AND! the bottom (at the CMB). This is,
+!	because we will assume that the forward temperature is fixed both
+!	at the top and the bottom (CMB).
+		do ii=1,(nt+1)**2
+			hbot = hbot - dhdt(ii,id,nr+1)*vol(ii,nr+1,1)
+			dhdt(ii,id,nr+1) = 0.
+		enddo
+
+	enddo
+
+	if(nproc>1) then
+		call psum(htop,1)
+		call psum(hbot,1)
+	endif
+ 
+!	Convert from heating rate to rate of change in temperature.
+	do ir=2,nr+1
+		a1 = 1.0/rhocv(ir)
+		do id=1,nd
+			do ii=1,(nt+1)**2
+				dhdt(ii,id,ir) = a1*dhdt(ii,id,ir)
+			enddo
+		enddo
+	enddo
+
+	if(itmng==1) then
+		call mytime(tout)
+		sec(20) = sec(20) + tout - tin
+	endif
+
+	end subroutine
+
+
+*dk advectadjoint
+	subroutine advectadjoint(fu,dhdt)
+!	This routine computes the heat advected and conducted per unit
+!	time and also accounts for phase transitions if they are present.
+!	Note that "fu" corresponds to velocities of the forward run.
+
+	include 'size.h'
+
+	common /velo/ upb(nt+1), u((nt+1)**2,nd,3,nr+1),  upe(nt+1)
+	common /temp/ tpb(nt+1), temp((nt+1)**2,nd,nr+1), tpe(nt+1)
+	common /mesh/ xn((nt+1)**2,nd,3)
+	common /radl/ rshl(nr+1), ird
+	common /volm/ vol((nt+1)**2,nr+1,2)
+	common /face/ psi((nt+1)**2,3), rdxn((nt+1)**2,3),
+     &              facet((nt+1)**2,nd,3,3)
+	common /ndar/ arn((nt+1)**2),  arne((nt+1)**2),
+     &              rarn((nt+1)**2), rarne((nt+1)**2)
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+	common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+	common /qdfc/ j1f(4), j2f(4), jef(4), i1n(3), i2n(3)
+	common /clck/ itmng, sec(50) 
+
+	real dhdt((nt+1)**2,nd,nr+1), dh((nt+1)**2,2)
+	real fu((nt+1)**2,nd,3,nr+1)
+
+	if(itmng==1) call mytime(tin)
+
+	call nulvec(dhdt,(nt+1)**2*nd*(nr+1))
+
+	i410 = 0
+	i660 = 0
+
+	do ir=1,nr
+ 
+		jr = ir+1
+		rm = 0.5*(rshl(ir) + rshl(jr))
+		r2 = rm**2
+		
+		if(jr<=nr) ra = r2 - 0.25*(rshl(jr) + rshl(jr+1))**2
+		if(jr>nr) ra = r2 - rshl(nr+1)**2
+
+		cr = 0.5*(cond(ir) + cond(jr))*rshl(ir)*rshl(jr)
+     &          /(rshl(ir) - rshl(jr))
+		ct = ra*cond(jr)/rshl(jr)
+		ai = (gamma(ir) - 1.)*rhocv(ir)
+		aj = (gamma(jr) - 1.)*rhocv(jr)
+
+		if(i410==0.and.rshl(1)-rshl(jr)>410.e3) i410 = ir
+		if(i660==0.and.rshl(1)-rshl(jr)>660.e3) i660 = ir
+
+		do id=1,nd
+!	Add contributions from radial advection and conduction,
+!	adiabatic heating, and phase changes.
+			ii1 = 2
+			if(mod(id,5)==1) ii1 = 1
+
+			do ii=ii1,(nt+1)**2
+			!	Peter: Use original velocities from forward run (called fu).
+				uf1  = 0.5*(fu(ii,id,1,ir) + fu(ii,id,1,jr))
+				uf2  = 0.5*(fu(ii,id,2,ir) + fu(ii,id,2,jr))
+				uf3  = 0.5*(fu(ii,id,3,ir) + fu(ii,id,3,jr))
+				vfl  = ((uf1*xn(ii,id,1) + uf2*xn(ii,id,2))
+     &                + uf3*xn(ii,id,3))*r2*arn(ii)
+			!	Peter: Advect with true velocities from forward run.
+				tadv = 0.5*(temp(ii,id,ir) + temp(ii,id,jr))*vfl
+			!	Peter: Reverse the sign of the adjoint heat conduction term.
+				cnd  = ((temp(ii,id,jr)-temp(ii,id,ir))*cr*arn(ii)) *-1.0
+				dh(ii,1) = vfl
+				dhdt(ii,id,ir) = (dhdt(ii,id,ir) + tadv*rhocv(ir)) + cnd
+     &                        +  temp(ii,id,ir)*vfl*ai
+				dhdt(ii,id,jr) = (dhdt(ii,id,jr) - tadv*rhocv(jr)) - cnd
+     &                        -  temp(ii,id,jr)*vfl*aj
+			enddo
+
+!	Add contributions from lateral advection and conduction.
+			do ifc=1,3
+
+				jj = i1n(ifc) + (nt+1)*i2n(ifc)
+				ib = max(1, 1-jj)
+				ie = min((nt+1)**2, (nt+1)**2-jj)
+
+				do ii=ib,ie
+				!	Peter: Use original velocities from forward run (called fu).
+					uf1  = 0.5*(fu(ii,id,1,jr) + fu(ii+jj,id,1,jr))
+					uf2  = 0.5*(fu(ii,id,2,jr) + fu(ii+jj,id,2,jr))
+					uf3  = 0.5*(fu(ii,id,3,jr) + fu(ii+jj,id,3,jr))
+					vfl  = ((uf1*facet(ii,id,ifc,1)
+     &                   + uf2*facet(ii,id,ifc,2))
+     &                   + uf3*facet(ii,id,ifc,3))*psi(ii,ifc)*ra
+				!	Peter: Advect with true velocities from forward run.
+					hadv = 0.5*(temp(ii,id,jr) + temp(ii+jj,id,jr))
+     &                      *vfl*rhocv(jr)
+				!	Peter: Reverse the sign of the adjoint heat conduction term.
+					cnd  = (ct*(temp(ii,id,jr) - temp(ii+jj,id,jr))
+     &                  *psi(ii,ifc)*rdxn(ii,ifc)) * -1.0
+					dh(ii,1) = hadv + cnd
+					dh(ii,2) = vfl*aj
+					dhdt(ii,id,jr) = dhdt(ii,id,jr) - dh(ii,1)
+     &                           - temp(ii,id,jr) * dh(ii,2)
+				enddo
+
+				do ii=ib,ie
+					dhdt(ii+jj,id,jr) = dhdt(ii+jj,id,jr) + dh(ii,1)
+     &                              + temp(ii+jj,id,jr) * dh(ii,2)
+				enddo
+			enddo
+		enddo
+	enddo
+
+	call comm3s(dhdt,nr,nt,1)
+ 
+!	Divide by nodal volume.
+	do ir=1,nr+1
+		do id=1,nd
+			do ii=1,(nt+1)**2
+				dhdt(ii,id,ir) = dhdt(ii,id,ir)*vol(ii,ir,2)
+			enddo
+		enddo
+	enddo
+ 
+	if(itmng==1) then
+		call mytime(tout)
+		sec(21) = sec(21) + tout - tin
+	endif
+
+	end subroutine
+
+
+*dk perturbinitadjoint
+	subroutine perturbinitadjoint(iadj,iter)
+!	This routine updates the initial condition with a correction field
+!	obtained from the adjoint-backward-integration and writes the
+!	new field back to tape
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'	
+	
+	common /flds/ f((nt+1)**2*nd*(nr+1),8)
+	common /temp/ tpb(nt+1), temp((nt+1)**2*nd*(nr+1)), tpe(nt+1)
+	common /velo/ upb(nt+1), u((nt+1)**2,nd,3,nr+1),  upe(nt+1)
+	common /pres/ ppb(nt+1), pres((nt+1)**2,nd,nr+1), ppe(nt+1)
+	common /conv/ step0, stepmin, stepmax
+	common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /radl/ rshl(nr+1), ird
+	common /io01/ casenum, gpath,  lpath
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+
+	integer irlimit, iter, iadj, ii, ik, lay
+	real orshl(nr+1), diffmax, dfac
+	real temp_tomo((nt+1)**2*nd,nr+1)
+	real min_tomo(nr+1), max_tomo(nr+1), mean_tomo(nr+1)
+	real min_glob(nr+1), max_glob(nr+1), mean_glob(nr+1)
+	real tol_fac, max_border, min_border
+	
+	character char1*4, cname*12, casenum*3
+	character*8 titl, otitl(4,4)
+	character gpath*80, lpath*80
+
+	write(char1,'(I4.4)') mynum
+
+	cname= 'b'//casenum//'.'//char1//'.00'
+	open (20, file=lpath(1:nlpath)//cname,status='unknown')
+	call vecin(f(1,1),otitl,orshl,1,nr,20,1)
+	close(20)
+
+!	read in old inital temperature field
+	cname=	'c'//casenum//'.'//char1//'.00'
+	open(61, file=lpath(1:nlpath)//cname, status='unknown')
+	call vecin(temp,otitl,orshl,1,nr,61,1)
+	close(61)
+
+!	Add a fraction of the gradient of the cost-function. The
+!	damping factor is set to a rather restrictive value of 0.8
+	dfac=0.8
+!	Skip the first layskp_appl layers.
+	do ii=(nt+1)**2*nd*layskp_appl+1,(nt+1)**2*nd*(nr+1)
+		temp(ii) = temp(ii) + dfac*f(ii,1)
+	enddo
+
+! ################################################
+! ########### DAMPING *NEW* *NEW* ####################
+! ################################################
+!	Read in the reference model to compute the min/max temperatures
+	cname=	'c511.'//char1//'.01'
+	open(62, file=lpath(1:nlpath)//cname, status='unknown')
+	call vecin(temp_tomo,otitl,orshl,1,nr,62,1)
+	close(62)
+	
+	do ii=1,nr+1
+		max_tomo(ii)=0.0
+		min_tomo(ii)=5000.0
+		mean_tomo(ii)=0.0
+		do ik=1,(nt+1)**2*nd
+			if(temp_tomo(ik,ii)>max_tomo(ii)) then
+				max_tomo(ii)=temp_tomo(ik,ii)
+			endif
+			if(temp_tomo(ik,ii)<min_tomo(ii)) then
+				min_tomo(ii)=temp_tomo(ik,ii)
+			endif
+			mean_tomo(ii)=mean_tomo(ii)+temp_tomo(ik,ii)
+		enddo
+		mean_tomo(ii)=mean_tomo(ii)/real((nt+1)**2*nd)/real(nproc)
+	enddo
+	
+!	Computation of the min/max temp values in each layer of the reference model (tomography)
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+	call MPI_REDUCE(max_tomo,max_glob,nr+1,MPI_REAL8,MPI_MAX,0,
+     &	MPI_COMM_WORLD,IERROR)
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+	call MPI_BCAST(max_glob,nr+1,MPI_REAL8,0,MPI_COMM_WORLD,IERROR)
+	
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+	call MPI_REDUCE(min_tomo,min_glob,nr+1,MPI_REAL8,MPI_MIN,0,
+     &	MPI_COMM_WORLD,IERROR)
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+	call MPI_BCAST(min_glob,nr+1,MPI_REAL8,0,MPI_COMM_WORLD,IERROR)
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+	call MPI_REDUCE(mean_tomo,mean_glob,nr+1,MPI_REAL8,MPI_SUM,0,
+     &	MPI_COMM_WORLD,IERROR)
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+	call MPI_BCAST(mean_glob,nr+1,MPI_REAL8,0,MPI_COMM_WORLD,IERROR)
+	call MPI_BARRIER(MPI_COMM_WORLD,IERROR)
+
+!	Restrict temp. values in the initial condition in the first lay_damp layers to be
+!	max. 500 K greater (plumes) or 1000 K smaller (slabs) than the reference mean value
+	do ir=1,nr+1
+		max_glob(ir)=max_glob(ir)/mean_glob(ir)
+		min_glob(ir)=min_glob(ir)/mean_glob(ir)
+	enddo
+	
+	!if(mynum==0) then
+	!	write(6,*) max_glob
+	!	write(6,*)
+	!	write(6,*) min_glob
+	!endif
+	
+	! average temperature in each layer of the initial model
+	call layrav(temp,tav)
+	
+	tol_fac=0.1
+	! update temperatures of layer 2 -> min(lay_damp,nr)
+	do ii=(nt+1)**2*nd+1,(nt+1)**2*nd*min(lay_damp,nr)
+		lay=ceiling(real(ii)/real((nt+1)**2*nd))
+		!max_border=(1.0+tol_fac)*max_glob(lay)
+		!min_border=(1.0-tol_fac)*min_glob(lay)
+		max_border=mean_glob(lay)+500.0
+		min_border=mean_glob(lay)-1000.0
+		
+		!if(temp(ii)>max_border) temp(ii) = max_border
+		!if(temp(ii)<min_border) temp(ii) = min_border
+		
+		
+		! ########### 11.10.11 #################
+		! NEW DAMPING ! 
+		! T deviations in initial state must not be larger than those in final state
+		! ##################################
+		
+		if(temp(ii)/tav(lay)>max_glob(lay)) then
+			!if(mynum==0) write(6,*) temp(ii), tav(lay), max_glob(lay)
+			temp(ii)=tav(lay)*max_glob(lay)
+			!if(mynum==0) then
+			!	write(6,*) temp(ii)
+			!	write(6,*)
+			!endif
+		endif
+		if(temp(ii)/tav(lay)<min_glob(lay)) then
+			!if(mynum==0) write(6,*) temp(ii), tav(lay), min_glob(lay)
+			temp(ii)=tav(lay)*min_glob(lay)
+			!if(mynum==0) then
+			!	write(6,*) temp(ii)
+			!	write(6,*)
+			!endif
+		endif
+	enddo
+! #################################################
+
+!	Compute difference between 'true' and 'estimated' initial condition.
+	cname= 'c511.'//char1//'.00'
+	open (90, file=lpath(1:nlpath)//cname, status='unknown')
+	call vecin(f(1,1),otitl,orshl,1,nr,90,1)
+	call vecdiff(f(1,2),f(1,1),temp,((nt+1)**2)*nd*(nr+1))
+	close(90)
+	
+	call proprty(iter)
+	cname= 'd'//casenum//'.'//char1//'.00'
+	open (91,file=lpath(1:nlpath)//cname, status='unknown')
+	call vecout(f(1,2),rshl,1,nr,nt,nr,91,1)
+	close(91)
+
+!	Peter: Check norm and maxium value of the temperature residual (misfit)
+!	between estimated and 'true' temp at the beginning of the forward run.
+	call norm3s(f(1,2),diffnrm,1,nd,nr,nt)
+	call normnew3s(f(1,2),diffnrm2,1)
+
+	diffmax=0.0
+	do ii=1,(nt+1)**2*nd*(nr+1)
+		diffmax=max(diffmax,abs(f(ii,2)))
+	enddo
+	if(nproc>1) call pmax(diffmax)
+      
+	if(mynum==0) write(7,15) iadj, diffnrm, diffnrm2, diffmax
+ 15	format(' Difference in the initial state of the forward run after'/
+     &' ADJT-ITER=', i4,' DIFFNRM=',1pe10.3,' DIFFNRM2=',1pe10.3,
+     &' DIFFMAX=',1pe10.3)
+
+!	Overwrite the temp/velocity initial condition field (first c-file)
+	call fldsout(0,iter)
+
+	end subroutine
+	
+	
+*dk normnew3s
+	subroutine normnew3s(r,rnorm,nj)
+	implicit none
+!	This routine computes the l2 norm of r.
+
+	include 'size.h'
+	include 'pcom.h'
+
+	common /clck/ itmng, sec
+
+	integer nj, itmng, ic,id,i1,i2
+
+	real sum1, rnorm, sec(50), tin, tout
+	real r(0:nt,nt+1,nd,nj*(nr+1))
+
+	if(itmng==1) call mytime(tin)
+ 
+	if(mynum<mproc*10/nd) then
+ 
+		sum1=0.0
+
+		if(mynum==0.or.(mynum==mproc.and.nd<=5)) then
+			do ic=4,nj*(nr+1)
+				sum1 = sum1 + r(0,1,1,ic)**2
+			enddo
+		endif
+
+		if(mynum==0.and.nd==10) then
+			do ic=4,nj*(nr+1)
+				sum1 = sum1 + r(0,1,6,ic)**2
+			enddo
+		endif
+
+		do ic=4,nj*(nr+1)
+			do id=1,nd
+				do i2=1,nt
+					do i1=1,nt
+						sum1 = sum1 + r(i1,i2,id,ic)**2
+					enddo
+				enddo
+			enddo
+		enddo
+ 
+		if(mproc*10/nd>1) call psum(sum1, 1)
+ 
+		rnorm = sqrt(sum1/((nt*nt*10*mproc+2)*(nr+1-4)))
+ 
+		if(itmng==1) then
+			call mytime(tout)
+			sec(13) = sec(13) + tout - tin
+		endif
+
+	endif
+
+	end subroutine
+	
+	
+*dk vecdiff
+	subroutine vecdiff(s1,s2,s3,nn)
+	implicit none
+	
+	integer nn, ii
+	real s1(nn), s2(nn), s3(nn)
+
+	do ii=1,nn
+		s1(ii) = s2(ii)-s3(ii)
+	enddo
+
+	end subroutine
+
+	
+!	##########################################
+!	######## NEW I/O SUBROUTINES #############
+!	##########################################
+*dk forwardout
+	subroutine forwardout(idump)
+!	This routine writes out the temperature and velocity
+!	fields of the forward run at each time-step for later
+!	use in the adjoint backward integration.
+
+	include 'size.h'
+	include 'pcom.h'
+
+	common /temp/ tpb(nt+1), temp((nt+1)**2,nd,nr+1), tpe(nt+1)
+	common /velo/ upb(nt+1), u((nt+1)**2,nd,3,nr+1),  upe(nt+1)
+	common /radl/ rshl(nr+1), ird
+	common /io01/ casenum, gpath,  lpath
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+      
+	character char1*4, char2*4, cname*14, casenum*3
+	character gpath*80, lpath*80
+
+	write(char1,'(I4.4)') mynum
+	write(char2,'(I4.4)') idump
+	
+	cname='a'//casenum//'.'//char1//'.'//char2
+
+	open(111, file=lpath(1:nlpath)//cname, form='unformatted',
+     &status='unknown')
+	call proprty(idump)
+	call vecoutunform2(temp,1,111)
+	call vecoutunform2(u,3,111)
+	close(111)
+
+	end subroutine   
+
+
+*dk forwardin
+	subroutine forwardin(fu,ftemp,idump)
+!	This routine reads in the forward fields of temperature 
+!	and velocity for use in the adjoint backward integration.
+
+	include 'size.h'
+	include 'pcom.h'
+
+	common /io01/ casenum, gpath,  lpath
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+
+	integer idump
+
+	real fu(3*nv), ftemp(nv)
+
+	character char1*4, char2*4, cname*14, casenum*3
+	character lpath*80
+
+	write(char1,'(I4.4)') mynum
+	write(char2,'(I4.4)') idump
+	
+	cname='a'//casenum//'.'//char1//'.'//char2
+
+	open (37, file=lpath(1:nlpath)//cname, form='unformatted',
+     &status='unknown')
+	call vecinunform2(ftemp,1,37)
+	call vecinunform2(fu,3,37)
+	close(37)
+
+	end subroutine
+      
+      
+*dk diffout
+	subroutine diffout(iadj,iter)
+!	This routine writes the misfit between the 'observed/true'
+!	temperatures and the temperatures computed at the end of
+!	the forward model run.
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+
+	common /flds/ f((nt+1)**2*nd*(nr+1),8)
+	common /temp/ tpb(nt+1), temp((nt+1)**2,nd,nr+1), tpe(nt+1)
+	common /velo/ upb(nt+1), u((nt+1)**2,nd,3,nr+1),  upe(nt+1)
+	common /radl/ rshl(nr+1), ird
+	common /io01/ casenum, gpath,  lpath
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+
+	integer iadj, iter
+	real orshl(nr+1), diffnrm
+	
+	character*8 otitl(4,4)
+	character char1*4, cname1*12, cname2*12      
+	character gpath*80,lpath*80, casenum*3
+
+	write(char1,'(I4.4)') mynum
+	cname1='c511.'//char1//'.01'
+	cname2='d'//casenum//'.'//char1//'.01'
+
+!	Peter: Read in the 'true' (observed) field at the final-stage.
+	open (99, file=lpath(1:nlpath)//cname1, status='unknown')
+	call vecin(f(:,1),otitl,orshl,1,nr,99,1)
+	close(99)
+
+!	Peter: Compute difference w.r.t. to 'estimated' final-stage.
+!	(f2=f1-temp=TRUE-CALC)
+	call vecdiff(f(:,2),f(:,1),temp,((nt+1)**2)*nd*(nr+1))
+
+!	Peter: Check norm and maximum value of the temperature residual (misfit)
+!	between estimated and 'true' temperatures at the end of forward run.
+	call norm3s(f(:,2),diffnrm,1,nd,nr,nt)
+
+	diffmax=0.0
+	do ii=1,(nt+1)**2*nd*(nr+1)
+		diffmax=max(diffmax,abs(f(ii,2)))
+	enddo
+	if(nproc>1) call pmax(diffmax)
+	
+	if(mynum==0) write(7,15) iadj, diffnrm, diffmax
+ 15   format(' Difference in the final state of the forward run'/
+     &' ITERATION=', i4,'  DIFFNRM=',1pe10.3,'  DIFFMAX=',1pe10.3/)
+
+!	Set the residual to zero for the first layskp_calc layers.
+	do ii=1,(nt+1)**2*nd*layskp_calc
+		!if(f(ii,2)>0) f(ii,2)=0.0
+		f(ii,2)=0.0
+	enddo
+
+	call proprty(iter)
+	open (79,file=lpath(1:nlpath)//cname2,status='unknown',
+     & form='formatted')
+	call vecout(f(:,2),rshl,1,nr,nt,nr,79,1)
+	close(79)
+
+	end subroutine
+
+
+*dk diffin
+	subroutine diffin
+!	This routine reads in the temperature residual between
+!	the "observed" temperature and the temperature that was
+!	calculated at the end of the forward integration.
+
+	include 'size.h'
+	include 'pcom.h'
+
+	common /temp/ tpb(nt+1), temp((nt+1)**2,nd,nr+1), tpe(nt+1)
+	common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+	common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128) 
+	common /io01/ casenum, gpath,  lpath
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+
+	real orshl(nr+1)
+
+	character*8 otitl(4,4)
+	character char1*4, cname*12      
+	character gpath*80,lpath*80, casenum*3
+
+	write(char1,'(I4.4)') mynum
+	cname= 'd'//casenum//'.'//char1//'.01'
+
+	open (77,file=lpath(1:nlpath)//cname, status='unknown')
+	call vecin(temp,otitl,orshl,1,nr,77,1)
+	close(77)
+
+!	Impose adjoint temperature boundary conditions.
+	do id=1,nd
+		do ii=1,(nt+1)**2
+			temp(ii,id,1)=tb(1)
+			temp(ii,id,nr+1)=tb(2)
+		enddo
+	enddo
+
+	call layrav(temp,tav)
+	tnrm = smean(temp)
+
+	end subroutine
+
+
+*dk adjointout
+	subroutine adjointout(iadj)
+!	This routine writes out the adjoint solution at the end
+!	of the adjoint-backward integration. A simple conjugate
+!	gradient method is applied.
+
+	include 'size.h'
+	include 'pcom.h'
+
+	common /temp/ tpb(nt+1), temp((nt+1)**2*nd,(nr+1)), tpe(nt+1)
+	common /radl/ rshl(nr+1), ird
+	common /io01/ casenum, gpath,  lpath
+	common /io02/ idump0, ngpath, nlpath, vtkw_output, cfile_output
+
+	integer iadj, istat
+	real resid((nt+1)**2*nd,nr+1), orshl(nr+1)
+	real delta, residnorm, tempnorm
+
+	character*8 otitl(4,4)
+	character char1*4, cname*12      
+	character gpath*80,lpath*80, casenum*3
+
+	delta=0.0
+	resid=0.0
+	write(char1,'(I4.4)') mynum
+	cname= 'b'//casenum//'.'//char1//'.00'
+
+!	Apply a conjugate gradient method by adding a weighted
+!	combination of previous search directions. The CG weight
+!	is set to delta
+	call norm3s(temp,tempnorm,1,nd,nr,nt)
+
+	open(99,file=lpath(1:nlpath)//cname,status='old',iostat=istat)
+	!if(mynum==0) write(7,*) "istat: ", istat, iadj
+	if(istat==0) then
+		! read residual of last step from file
+		open(99,file=lpath(1:nlpath)//cname,status='unknown')
+		call vecin(resid,otitl,orshl,1,nr,99,1)
+		close(99)
+
+		call norm3s(resid,residnorm,1,nd,nr,nt)
+		if(residnorm>0) delta = (tempnorm/residnorm)**2
+		do ir=1,(nr+1)
+			do ii=1,(nt+1)**2*nd
+				temp(ii,ir) = temp(ii,ir) + delta*resid(ii,ir)
+			enddo
+		enddo
+	endif
+
+	call proprty(1)
+	open(99,file=lpath(1:nlpath)//cname,status='unknown')
+	call vecout(temp,rshl,1,nr,nt,nr,99,1)
+	close(99)
+
+!	Write the step-length of the CG algorithm
+	if(mynum==0) write(7,15) residnorm, tempnorm, delta
+ 15   format('  Conjugate Gradient Step Length in the adjoint-solution'/
+     &'  RESID =',1pe10.3,'   TEMP =',1pe10.3,
+     &'  DELTA = ',1pe10.3/)
+
+	end subroutine
+      
+      
+*dk vecinunform2
+	subroutine vecinunform2(u,nj,nf)
+	implicit none
+!	This routine reads the nodal field u from logical unit nf
+!	using unformated I/O and without any additional information.
+ 
+	include 'size.h'
+	include 'pcom.h'
+
+	integer nf, nj, ii
+	real u((nt+1)**2*nd*nj*(nr+1))
+
+	read(nf) (u(ii),ii=1,(nt+1)**2*nd*nj*(nr+1))
+ 
+	end subroutine
+
+
+*dk vecoutunform2
+	subroutine vecoutunform2(u,nj,nf)
+	implicit none
+!	This routine writes the nodal field u to logical unit nf
+!	using unformated I/O and without any additional information.
+ 
+	include 'size.h'
+	include 'pcom.h'
+
+	integer nf, nj, ii
+	real u((nt+1)**2*nd*nj*(nr+1))
+ 
+	write(nf) (u(ii),ii=1,(nt+1)**2*nd*nj*(nr+1))
+ 
+	end subroutine
+	

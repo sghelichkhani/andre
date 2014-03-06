@@ -1,0 +1,96 @@
+// Input file for truepol_terra.f90 //
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/15.1_40Ma_mt256_1021_PHASE4/Iteration_07"
+
+// ##### general settings ######
+2						D/O sph.harmonics (start)
+50						D/O sph.harmonics (end)
+0						start depth (km)
+3000					end depth (km)
+0						TPW path into the north pole? (0: no, 1: yes)
+11						number of time steps T-files
+40						starting point in the past (Ma)
+0						geoid / topo trend
+// ##### viscosity ######
+75						begin asthenosphere (km)	
+220						begin deep mantle (km)
+1e23					viscosity deep mantle
+1e23					viscosity lithosphere
+1e19					viscosity asthenosphere
+1						viscosity profile from file? (1: yes/0: no)
+'visc_1021_mt256.dat'	viscosity file name		 'visc_1020_mt512.dat'
+1e21					reference viscosity when using visc file
+// ##### output region ######
+100						grid size (latitude)	!179
+-90						output lat1	!-89
+90						output lat2	!89
+-180					output long1
+180						output long2
+// ##### density/temperature/velocity/shear heating ######
+1						temperature output (0: no, 1: yes)
+0						velocity output (0: no, 1: yes)
+0						shear heating output (0: no, 1: yes)
+0						slice output? (0: no, 1: yes)
+0						start depth for temperature/density plots (km)
+3000		 			end depth for temperature/density plots (km)
+// ##### heat flux ######
+0						heat flux output (0: no, 1: yes)
+20						number of time steps heat-files
+// ##### other ######
+1						topo-geoid xyz-files output for 4DLM (0: no, 1: yes)
+0						level terra grid for velocity plots
+
+
+// -----------------------------------------------------------------------------------------
+
+
+-45						output lat1
+45						output lat2
+-30						output long1
+55						output long2
+
+-90						output lat1
+90						output lat2
+-180					output long1
+180						output long2
+
+15						output lat1
+40						output lat2
+30						output long1
+60						output long2
+
+-90						output lat1
+90						output lat2
+-180					output long1
+180						output long2
+
+
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/18.4_40Ma_mt512_10pres_1020/Iteration_02"
+
+"/import/netapp-m-02-terra/horbach/adjoint/Endfeld/Endfeld1024_mt512"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/18.2_40Ma_mt512_10pres_1020/Iteration_03"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/18.1_20Ma_TETHYS_mt512/Iteration_05"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/17.1_40Ma_TETHYS_mt256/Iteration_05"
+
+"/import/netapp-m-02-terra/horbach/adjoint/Endfeld/Endfeld1024_mt512"
+
+"/import/netapp-m-02-terra/horbach/adjoint/Endfeld/TOMO_NREST"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/16.2_40Ma_TOMO512_LRZ/Iteration_06"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/16.1_40Ma_BLANKMANTLE_LRZ/geoid_trend"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/14.1_40Ma_SCALED_Test/Iteration_07"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/15.1_40Ma_PHASE_LRZ512/Iteration_07"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/13.1_40Ma_Africa_CHANNEL/Iteration_07"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/12.1_40Ma_Africa_SCALED/Iteration_15"
+
+"/import/netapp-m-02-terra/horbach/adjoint/runs/11.2_10Ma_OLDTOMO/Iteration_08"
+

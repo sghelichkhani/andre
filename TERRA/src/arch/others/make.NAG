@@ -1,0 +1,11 @@
+# -----------------------------------------------------------------------------
+#       Parameters for compilation with NAGware's Fortran90 compiler
+# -----------------------------------------------------------------------------
+
+FC      = f95
+LK      = f95
+FFLAGS  = -colour -maxcontin=39 -dusty -double -mismatch_all -I./code -I/usr/lib/mpich/include
+LFLAGS  = -L/usr/lib/mpich/lib
+LIBS    = -lmpich
+
+# -----------------------------------------------------------------------------

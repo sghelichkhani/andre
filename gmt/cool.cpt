@@ -1,0 +1,5 @@
+#	$Id: cool.cpt 8899 2011-07-27 01:59:56Z pwessel $
+#
+# Simulates the COOL colormap in Matlab
+#
+0	cyan	1	magenta

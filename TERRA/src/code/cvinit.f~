@@ -1,0 +1,1338 @@
+*DK eosset
+C>    Initialises the equation of state parameters
+C>
+C>    This subroutine initialises the equation of state parameters stored in
+C>    the two common blocks EOS1 and EOS2.map The way this is done depends on the
+C>    input parameter IEOS which is set in the parameter file 'interra'.
+C>    We have
+C>    <table>
+C>    <tr><td>value of IEOS</td><td>equation of state model</td></tr>
+C>    <tr><td>0,...,9</td><td>Boussinesq</td></tr>
+C>    <tr><td>10,...,19</td><td></td>Morse</tr>
+C>    <tr><td>20,...,29</td><td></td>Murnghan</tr>
+C>    <tr><td>30,...,39</td><td></td>Adam-Williamson</tr>
+C>    </table>
+      subroutine eosset
+ 
+ 
+      include 'size.h'
+      include 'pcom.h'
+      common /oper/ ra(3,8,nr+1), alp(7,(nt+1)**2,2),
+     &              atn(4,7,(nt+1)**2,9)
+      common /radl/ rshl(nr+1), ird
+      common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+      common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+      common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+      common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+      common /refr/ pi, gc, corems, nslc
+      common /moon/ imoon, radis(5), tcore, qcgn, visc0
+ 
+      lvr = 1.45*log(real(nr))
+ 
+      if(ieos/10 .eq. 0) then
+ 
+         if(tb(2).gt.0.) then
+            dlt  = tb(2) - tb(1)
+         else
+            rayl = texpn*grav*hgen*(rshl(1) - rshl(nr+1))**5
+     &             *rho0**3*sheat/(visc*tcond**2)
+            hdt  = hgen*rho0*(rshl(1) - rshl(nr+1))**2/tcond
+            dlt  = 0.5*hdt/(1.e-4*rayl)**(1./3.)
+         endif
+ 
+         tavg = tb(1) + 0.60*dlt
+         if(tb(2).gt.0. .and. hgen.eq.0.) tavg = tb(1) + 0.25*dlt
+ 
+         if(hgen.gt.0. .and. ieos.ne.5) tavg = 2000.
+ 
+         if(imoon .eq. 1) then
+            tavg   = 1600.
+            corems = 7874.*pi*rshl(nr+1)**3/0.75
+            visc0  = visc
+         endif
+ 
+         prf(1) = 0.
+ 
+         a1     = 0.15*(rshl(1) - rshl(nr/4))
+         a2     = 0.30*(rshl(1) - rshl(nr/4))
+         eps1   = 0.01*a1
+         eps2   = 0.01*a2
+         one1   = 0.9999
+         one2   = 1.0001
+         shlthk = rshl(1) - rshl(nr+1) + eps2
+         t1 = (one1*tavg - tb(1))
+     &       /(exp(-a1/(rshl(1) - rshl(nr/4) + eps1)) - exp(-a1/eps1))
+         t3 = (one2*tavg - tb(2))
+     &       /(exp(-a2/(shlthk - rshl(1) + rshl(nr-nr/4+1)))
+     &      - exp(-a2/eps2))
+         t2 = tb(1) - t1*exp(-a1/eps1)
+         t4 = tb(2) - t3*exp(-a2/eps2)
+ 
+         do ir=1,nr+1
+            depth  = rshl(1) - rshl(ir)
+            if(ir.le.nr/4) then
+               tmprf(ir) = t1*exp(-a1/(depth + eps1))   + t2
+            elseif(ir.gt.nr-nr/4 .and. tb(2).gt.0.) then
+               tmprf(ir) = t3*exp(-a2/(shlthk - depth)) + t4
+            else
+               tmprf(ir) = tavg
+            endif
+            tav(ir)   = tmprf(ir)
+            rhorf(ir) = rho0
+            gamma(ir) = 1.
+            drhdp(ir) = 0.
+            rhocv(ir) = rho0*sheat
+            alpha(ir) = texpn
+            cond(ir)  = tcond
+            grv(ir)   = grav
+            shllms    = rho0*pi*(rshl(ir)**3 - rshl(nr+1)**3)/0.75
+            if(imoon .eq. 1)
+     &         grv(ir) = gc*(corems + shllms)/rshl(ir)**2
+            if(ir .ge. 2)
+     &         prf(ir) = prf(ir-1) + 0.5*(grv(ir-1) +  grv(ir))
+     &                            *rho0*(rshl(ir-1) - rshl(ir))
+         end do
+ 
+      elseif(ieos/10 .eq. 1) then
+ 
+         call morse(rshl,ra)
+ 
+      elseif(ieos/10 .eq. 2) then
+ 
+         call murnghan(rshl,ra)
+ 
+         do ir=1,nr+1
+            tav(ir) = tmprf(ir)
+         end do
+         tav(1)    = tb(1)
+         tav(2)    = tb(1) + 0.33*(tmprf(4) - tb(1))
+         tav(3)    = tb(1) + 0.66*(tmprf(4) - tb(1))
+         if(tb(2).ne.0.)then
+         tav(nr)   = tb(2) - 0.50*(tb(2) - tmprf(nr-1))
+         tav(nr+1) = tb(2)
+         endif
+ 
+      elseif(ieos/10 .eq. 3) then
+ 
+c        Use Adams-Williamson EOS.
+ 
+         b1   = 0.15*(rshl(1) - rshl(nr/4))
+         eps  = 0.01*b1
+         tavg = 1800.
+         t1   = (tavg - tb(1))
+     &         /(exp(-b1/(rshl(1) - rshl(nr/4+1) + eps)) - exp(-b1/eps))
+         t2   = tb(1) - t1*exp(-b1/eps)
+ 
+         do ir=1,nr/4
+            depth     = rshl(1) - rshl(ir)
+            tmprf(ir) = t1*exp(-b1/(depth + eps)) + t2
+         end do
+ 
+         gmma      = 1.25
+         a1        = grav*texpn/(gmma*sheat)
+         tref      = tmprf(nr/4)*exp(-a1*gmma*(rshl(1) - rshl(nr/4)))
+         prf(1)    = 0.
+ 
+         do ir=1,nr+1
+            f         = exp(a1*(rshl(1) - rshl(ir)))
+            rhorf(ir) = rho0*f
+            if(ir.gt.nr/4) tmprf(ir) = tref*f**gmma
+            cv        = sheat/(1. + gmma*texpn*tmprf(ir))
+            drhdp(ir) = texpn/(gmma*cv)
+            rhocv(ir) = rhorf(ir)*cv
+            alpha(ir) = texpn
+            cond(ir)  = tcond
+            if(ir .ge. 2) prf(ir) = prf(ir-1) + (rshl(ir-1) - rshl(ir))
+     &                              *grav*0.5*(rhorf(ir-1) + rhorf(ir))
+            grv(ir)   = grav
+            gamma(ir) = gmma
+         end do
+ 
+         if(tb(2) .gt. 0.) then
+            ag     = a1*gmma
+            eps    = 1.0e-1*(rshl(1) - rshl(nr/4))
+            one    = 1.001
+            truthk = (rshl(1) - rshl(nr+1))
+            shlthk = (rshl(1) - rshl(nr+1)) + eps
+            bb     = (ag*truthk - log(tb(2)/tref/one))
+     &              /(1./(shlthk - rshl(1) + rshl(nr-nr/4+1)) - 1./eps)
+            t0     = tb(2)*exp(-ag*truthk - bb/eps)
+ 
+            do ir=nr-nr/4+1,nr+1
+               tmprf(ir) = t0*exp(          ag*(rshl(1) - rshl(ir))
+     &                          + bb/(shlthk - (rshl(1) - rshl(ir))))
+            end do
+         endif
+ 
+         do ir=1,nr+1
+            tav(ir) = tmprf(ir)
+         end do
+ 
+!         if(mynum .eq. 0) write(6,10)
+! 10      format('     radius     density   temperature   pressure',
+!     &          '    gravity')
+!         do ir=1,nr+1
+!         if(mynum .eq. 0) write(6,20) rshl(ir), rhorf(ir), tmprf(ir),
+!     &                                 prf(ir), grv(ir)
+! 20      format(1p5e12.4)
+!         end do
+ 
+!         if(mynum .eq. 0) write(6,30)
+! 30      format(/'     radius      alpha        cv        drho/dp ',
+!     &           '     gamma')
+!         do ir=1,nr+1
+!         cv = rhocv(ir)/rhorf(ir)
+!         if(mynum .eq. 0) write(6,40)  rshl(ir), alpha(ir), cv,
+!     &                                 drhdp(ir), gamma(ir)
+! 40      format(1p5e12.4)
+!         end do
+ 
+      endif
+ 
+      end
+*dk geoidtest
+      subroutine geoidtest(temp)
+ 
+c     This routine generates a temperature field with variation
+c     corresponding to spherical harmonic P(l,m).
+ 
+      include 'size.h'
+      real temp((nt+1)**2,nd,nr+1)
+      common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+      common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+      common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+      common /mesh/ xn((nt+1)**2,nd,3)
+      common /radl/ rshl(nr+1), ird
+ 
+      l  = 2
+      m  = 0
+      jr = nr/2 + 1
+ 
+      tempref = 2000.
+ 
+      tb(1) = tempref
+      tb(2) = tempref
+ 
+      do ir=1,nr+1
+         tmprf(ir) = tempref
+         tav(ir)   = tempref
+         do ii=1,(nt+1)**2
+            do id=1,nd
+               temp(ii,id,ir) = tempref
+            end do
+         end do
+      end do
+ 
+      rt   = 0.5*(rshl(jr-1) + rshl(jr))
+      rb   = 0.5*(rshl(jr+1) + rshl(jr))
+      ampl = 1.e6*3.*rshl(jr)**2/(rho0*texpn*(rt**3 - rb**3))
+ 
+      a1   = ampl*(-1.)**m
+ 
+      do ii=1,(nt+1)**2
+         do id=1,nd
+ 
+            if(mod(id,5).eq.1) call pbar(xn(ii,id,3),l,iabs(m),plm)
+ 
+            phi = atan2(xn(ii,id,2) + 1.e-40 , xn(ii,id,1))
+            del = a1*plm*(cos(m*phi) - sin(m*phi))
+ 
+            temp(ii,id,jr) = tempref + del
+ 
+         end do
+      end do
+ 
+      end
+*dk harmonic
+      subroutine harmonic(temp,l,m,ampl,phi0)
+ 
+c     This routine generates a temperature field with variation
+c     corresponding to spherical harmonic P(l,m).
+ 
+      include 'size.h'
+      real temp((nt+1)**2,nd,nr+1)
+      common /mesh/ xn((nt+1)**2,nd,3)
+      common /radl/ rshl(nr+1), ird
+ 
+      a1 = ampl*(-1.)**m
+      a2 = 3.141592653589793/(rshl(1) - rshl(nr+1))
+      rm = 0.5*(rshl(1) + rshl(nr+1))
+ 
+      do ii=1,(nt+1)**2
+         do id=1,nd
+ 
+            if(mod(id,5).eq.1) call pbar(xn(ii,id,3),l,iabs(m),plm)
+ 
+            phi = atan2(xn(ii,id,2) + 1.e-40 , xn(ii,id,1)) - phi0
+            del = a1*plm*(cos(m*phi) - sin(m*phi))
+ 
+            do ir=2,nr
+               dt  = del*cos(a2*(rshl(ir) - rm))
+               temp(ii,id,ir) = temp(ii,id,ir) + dt
+            end do
+ 
+         end do
+      end do
+ 
+      end
+*dk initmoon
+      subroutine initmoon(temp,ampl)
+ 
+c     This routine generates a temperature field with variation
+c     corresponding to spherical harmonic P(l,m).
+ 
+      include 'size.h'
+      real temp((nt+1)**2,nd,nr+1)
+      common /mesh/ xn((nt+1)**2,nd,3)
+      common /radl/ rshl(nr+1), ird
+ 
+      rm = 0.5*(rshl(1) + rshl(nr+1))
+      a2 = 3.141592653589793/(rshl(1) - rshl(nr+1))
+ 
+      do ii=1,(nt+1)**2
+         do id=1,nd
+ 
+            call pbar(xn(ii,id,2),1,0,plm)
+ 
+            del = ampl*plm
+ 
+            do ir=2,nr
+               dt  = del*cos(a2*(rshl(ir) - rm))
+               if(rshl(ir) .lt. rm) dt = del
+               temp(ii,id,ir) = temp(ii,id,ir) + dt
+            end do
+ 
+         end do
+      end do
+ 
+      end
+*dk inittemp
+      subroutine inittemp(temp,amp,index)
+ 
+c     This routine generates an initial temperature field specified
+c     by the parameter 'index' as follows:
+ 
+c               index        l   pattern
+c                 1          2- axisymmetric
+c                 2          2+ axisymmetric
+c                 3          3  axisymmetric
+c                 4          3  l=3,m=1
+c                 5          3  tetrahedral
+c                 6          4- axisymmetric
+c                 7          4+ axisymmetric
+c                 8          4  sectoral
+c                 9          4- cubic
+c                10          4+ cubic
+
+      include 'size.h'
+      real temp((nt+1)**2*nd,nr+1)
+ 
+      pi4 = 0.2500*3.141592653589793
+      pi8 = 0.1250*3.141592653589793
+      p16 = 0.0625*3.141592653589793
+ 
+      go to (10, 20, 30, 40, 50, 60, 70, 80, 90, 100),  index
+
+!	harmonic has just influence on the layers 2-nr 
+ 10   call harmonic(temp,2,0,-amp, 0.)
+      return
+ 
+ 20   call harmonic(temp,2,0, amp, 0.)
+      return
+ 
+ 30   call harmonic(temp,3,0, amp, 0.)
+      return
+ 
+ 40   call harmonic(temp,3,1,-amp,pi4)
+      return
+ 
+ 50   call harmonic(temp,3,2, amp,pi8)
+      return
+ 
+ 60   call harmonic(temp,4,0,-amp, 0.)
+      return
+ 
+ 70   call harmonic(temp,4,0, amp, 0.)
+      return
+ 
+ 80   call harmonic(temp,4,4, amp,p16)
+      return
+ 
+ 90   call harmonic(temp,4,0,-amp, 0.)
+      call harmonic(temp,4,4,-amp,p16)
+      return
+ 
+ 100  call harmonic(temp,4,0, amp, 0.)
+      call harmonic(temp,4,4, amp,p16)
+      return
+ 
+      end
+
+*dk morse
+      subroutine morse(rshl,ra)
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real ra(3,8,*), rshl(*), c1(129), c2(129), c3(129)
+      common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+      common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+      common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+      common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+      common /grad/ rg(3,2,nr+1), grd(7,(nt+1)**2,3,2)
+      common /mors/ rhor(4), bmod(4), dbmd(4), cvmor, gammor
+      common /refr/ pi, gc, corems, nslc
+ 
+      lc     = 0
+      lm     = 0
+      c4     = -1./3.
+      tmorse = 1900.
+ 
+      do ir=1,nr+1
+         depth = rshl(1) - rshl(ir)
+         if(depth .lt. 410.e3) then
+            jr = 1
+         elseif(depth .lt. 510.e3) then
+            jr = 2
+         elseif(depth .lt. 660.e3) then
+            jr = 3
+         else
+            jr = 4
+         endif
+         if(depth.ge. 660.e3 .and. lm.eq.0) lm = ir
+         if(depth.ge.2500.e3 .and. lc.eq.0) lc = ir
+         c1(ir)    = 3.*bmod(jr)/(dbmd(jr)-1.)
+         c2(ir)    = 1./rhor(jr)
+         c3(ir)    = dbmd(jr) - 1.
+         alpha(ir) = 2.40e-5
+         tmprf(ir) = tmorse + 0.3e-3*depth
+         tav(ir)   = tmprf(ir)
+         if(depth .le. 450.e3)
+     &      tav(ir) = 300. + 2000.*exp(-65.e3/(depth + 1.e3))
+         if(depth.gt.2700.e3 .and. tb(2).ne.0.) tav(ir) = tmprf(ir)
+     &      - 50. + 350.*(1. - exp(-26.5e3/(2891.e3 - depth)))
+         rhorf(ir) = rhor(jr)*(1. - alpha(ir)*tav(ir))
+         q         = c2(ir)*rhorf(ir)
+         r         = q**c4
+         e         = exp(c3(ir)*(1. - r))
+         bm        = c1(ir)*r*q*e*(2.*(e - 1.)
+     &             + c3(ir)*r*(2.*e - 1.))/3.
+         drhdp(ir) = rhorf(ir)/bm
+         rhocv(ir) = rhorf(ir)*cvmor
+         alpha(ir) = gammor*rhocv(ir)/bm
+         if(jr.eq.4) alpha(ir) = alpha(lm)*(rhorf(lm)/rhorf(ir))**4
+         if(jr.eq.4) rhocv(ir) = rhocv(lm)*(rhorf(lm)/rhorf(ir))**0.1
+         gamma(ir) = alpha(ir)*bm/rhocv(ir)
+      end do
+ 
+      acond     = 19.*tcond/(rshl(lc) - rshl(nr+1))**4
+      cond(1)   = tcond
+      prf(1)    = 0.
+      grv(nr+1) = gc*corems/rshl(nr+1)**2
+ 
+      pb = 0.
+      k  = 0
+ 10   k  = k + 1
+ 
+c...  Compute new gravity profile.
+ 
+      am = corems
+      do ir=nr,1,-1
+         rt = rshl(ir)
+         rb = rshl(ir+1)
+         r3 = rt**3 - rb**3
+         r4 = rt**4 - rb**4
+         qt = (3.*r4 - 4.*rb*r3)/(12.*(rt - rb))
+         qb = (3.*r4 - 4.*rt*r3)/(12.*(rb - rt))
+         am = am + 4.*pi*(qt*rhorf(ir) + qb*rhorf(ir+1))
+         grv(ir) = gc*am/rt**2
+      end do
+ 
+c...  Compute new adiabat.
+ 
+      do it=1,3
+         do ir=2,nr+1
+            dx  = 1./nslc
+            dr  = (rshl(ir-1) - rshl(ir))*dx
+            do l=1,10
+               tmp = tmprf(ir-1)
+               x   = -0.5*dx
+               do i=1,nslc
+                  x   = x + dx
+                  omx = 1. - x
+                  tx  = x*tmprf(ir-1) + omx*tmprf(ir)
+                  ax  = x*alpha(ir-1) + omx*alpha(ir)
+                  gmx = x*gamma(ir-1) + omx*gamma(ir)
+                  rcx = x*rhocv(ir-1) + omx*rhocv(ir)
+                  rx  = x*rhorf(ir-1) + omx*rhorf(ir)
+                  gvx = x*  grv(ir-1) + omx*  grv(ir)
+                  tmp = tmp + dr*ax*gvx*tx*rx/(rcx*(1. + ax*gmx*tx))
+               end do
+               tmprf(ir) = tmp
+            end do
+         end do
+      end do
+ 
+      do ir=2,nr+1
+         depth = rshl(1) - rshl(ir)
+         if(rshl(1) - rshl(ir) .ge.  450.e3) tav(ir) = tmprf(ir)
+         if(depth.gt.2700.e3 .and. tb(2).ne.0.) tav(ir) = tmprf(ir)
+     &      - 50. + 350.*(1. - exp(-26.5e3/(2891.e3 - depth)))
+      end do
+      if(tb(2) .ne. 0.) tav(nr+1) = tb(2)
+ 
+c...  Compute new pressure profile.
+ 
+      prf(1) =  0.
+      prf(2) = -(ra(2,7,1)*rhorf(1)*grv(1)
+     &         + ra(3,7,1)*rhorf(2)*grv(2))/rg(3,2,1)
+      do ir=2,nr
+         prf(ir+1) = -(ra(1,7,ir)*rhorf(ir-1)*grv(ir-1)
+     &               + ra(2,7,ir)*rhorf(ir  )*grv(ir  )
+     &               + ra(3,7,ir)*rhorf(ir+1)*grv(ir+1)
+     &               + rg(1,2,ir)*prf(ir-1) + rg(2,2,ir)*prf(ir))
+     &                /rg(3,2,ir)
+      end do
+ 
+      if(abs(prf(nr+1) - pb) .lt. 0.00001*prf(nr+1)) go to 100
+ 
+      pb = prf(nr+1)
+ 
+      if(k .gt. 10) then
+         if(mynum .eq. 0) write(6,'(" *****reference pressure",
+     &      " calculation did not converge")')
+         stop
+      endif
+ 
+c...  Compute new density, bulk modulus, specific heat,
+c...  thermal expansivity, and Grueneisen gamma.
+ 
+      do ir=2,nr+1
+ 
+         j    = 0
+         rho1 = rhorf(ir)
+ 
+ 20      j  = j + 1
+ 
+         q  = c2(ir)*rho1
+         r  = q**c4
+         e  = exp(c3(ir)*(1. - r))
+         pz = c1(ir)*q*r*e*(e - 1.)
+         bm = c1(ir)*r*q*e*(2.*(e - 1.) + c3(ir)*r*(2.*e - 1.))/3.
+         drhdp(ir) = rho1/bm
+         rhocv(ir) = rho1*cvmor
+         alpha(ir) = gammor*rhocv(ir)/bm
+         if(ir.gt.lm) alpha(ir) = alpha(lm)*(rhorf(lm)/rho1)**4
+         if(ir.gt.lm) rhocv(ir) = rhocv(lm)*(rhorf(lm)/rho1)**0.1
+         gamma(ir) = alpha(ir)*bm/rhocv(ir)
+         cond(ir)  = tcond
+c        if(ir.ge.lc) cond(ir) = tcond + acond*(rshl(lc) - rshl(ir))**4
+         pt   = bm*alpha(ir)*tav(ir)
+         rho2 = rho1*(1. + (prf(ir) - pz - pt)/bm)
+ 
+         if(abs(rho2 - rho1) .gt. 0.00001*rho2) then
+            rho1 = rho2
+            if(j .lt. 50) go to 20
+            if(mynum .eq. 0) write(6,'(" *****reference density",
+     &         " calculation did not converge for ir =",i4)') ir
+            stop
+         else
+            rhorf(ir) = rho2
+         endif
+ 
+      end do
+ 
+      go to 10
+ 
+ 100  continue
+ 
+      rho0 = 0.75*(am - corems)/(pi*(rshl(1)**3 - rshl(nr+1)**3))
+ 
+!      if(mynum .eq. 0) then
+ 
+!         write(6,'(/" The mean mantle density is ",
+!     &              1pe11.4," kg/m**3."/)') rho0
+ 
+!         write(6,'("     radius     density     tmprf   ",
+!     &             "   avg temp    pressure     gravity")')
+ 
+!        do ir=1,nr+1
+!            write(6,'(1p6e12.4)') rshl(ir), rhorf(ir), tmprf(ir),
+!     &                             tav(ir), prf(ir),   grv(ir)
+!         end do
+ 
+!         write(6,'(/"     radius      alpha        cv   ",
+!     &              "     drho/dp     gamma")')
+ 
+!         do ir=1,nr+1
+!            cv = rhocv(ir)/rhorf(ir)
+!            write(6,'(1p5e12.4)')  rshl(ir), alpha(ir), cv,
+!     &                             drhdp(ir), gamma(ir)
+!         end do
+ 
+!      end if
+ 
+      end
+*dk murnghan
+      subroutine murnghan(rshl,ra)
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real rshl(*), ra(3,8,*), rhdks(129)
+      common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+      common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+      common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+      common /grad/ rg(3,2,nr+1), grd(7,(nt+1)**2,3,2)
+      common /refr/ pi, gc, corems, nslc
+      common /murn/ rho00, ak0, dk0, ttop, cpmurn, thcond
+ 
+      gc        = 6.67e-11
+      corems    = 1.94e+24
+      do 10 ir=1,nr+1
+      gamma(ir) = 1.1
+      rhorf(ir) = rho00*(1.0 + 0.3*(ir-1.)/(nr-1.))
+      tmprf(ir) = ttop + 50.*(ir-1)/(real(nr)/16.)
+      bms       = ak0*(rhorf(ir)/rho00)**dk0
+      rhdks(ir) = rhorf(ir)/bms
+      alpha(ir) = gamma(ir)*rhorf(ir)*cpmurn/bms
+      cv        = cpmurn/(1. + alpha(ir)*gamma(ir)*tmprf(ir))
+      drhdp(ir) = alpha(ir)/(gamma(ir)*cv)
+      rhocv(ir) = rhorf(ir)*cv
+      cond(ir)  = tcond
+ 10   continue
+ 
+      prf(1)    = 0.
+      grv(nr+1) = gc*corems/rshl(nr+1)**2
+ 
+      pb = 0.
+      k  = 0
+ 20   k  = k + 1
+      am = corems
+      do 30 ir=nr,1,-1
+      rt = rshl(ir)
+      rb = rshl(ir+1)
+      r3 = rt**3 - rb**3
+      r4 = rt**4 - rb**4
+      qt = (3.*r4 - 4.*rb*r3)/(12.*(rt - rb))
+      qb = (3.*r4 - 4.*rt*r3)/(12.*(rb - rt))
+      am = am + 4.*pi*(qt*rhorf(ir) + qb*rhorf(ir+1))
+      grv(ir) = gc*am/rt**2
+ 30   continue
+ 
+      do 60 ir=2,nr+1
+      dx  = 1./nslc
+      dr  = (rshl(ir-1) - rshl(ir))*dx
+      do 50 l=1,10
+      tmp = tmprf(ir-1)
+      x   = -0.5*dx
+      do 40 i=1,nslc
+      x   = x + dx
+      omx = 1. - x
+      tmp = tmp + dr*gamma(ir)*(x*grv(ir-1) + omx*grv(ir))
+     &      *(x*tmprf(ir-1) + omx*tmprf(ir))
+     &      *(x*rhdks(ir-1) + omx*rhdks(ir))
+ 40   continue
+      tmprf(ir) = tmp
+ 50   continue
+ 60   continue
+ 
+      prf(1) =  0.
+      prf(2) = -(ra(2,7,1)*rhorf(1)*grv(1)
+     &         + ra(3,7,1)*rhorf(2)*grv(2))/rg(3,2,1)
+      do 70 ir=2,nr
+      prf(ir+1) = -(ra(1,7,ir)*rhorf(ir-1)*grv(ir-1)
+     &            + ra(2,7,ir)*rhorf(ir  )*grv(ir  )
+     &            + ra(3,7,ir)*rhorf(ir+1)*grv(ir+1)
+     &            + rg(1,2,ir)*prf(ir-1) + rg(2,2,ir)*prf(ir))
+     &             /rg(3,2,ir)
+ 70   continue
+ 
+      if(abs(prf(nr+1) - pb) .lt. 0.00001*prf(nr+1)) go to 100
+ 
+      pb = prf(nr+1)
+ 
+      if(k.gt.10) then
+         if(mynum .eq. 0) write(6,75)
+ 75      format(" *****reference pressure calculation",
+     &          " did not converge")
+         stop
+      endif
+ 
+      do 90 ir=2,nr+1
+ 
+      rho1 = rhorf(ir)
+      j  = 0
+ 
+ 80   j  = j + 1
+ 
+      bms       = ak0*(rho1/rho00)**dk0
+      rhdks(ir) = rho1/bms
+      alpha(ir) = gamma(ir)*rho1*cpmurn/bms
+      cv        = cpmurn/(1. + alpha(ir)*gamma(ir)*tmprf(ir))
+      drhdp(ir) = alpha(ir)/(gamma(ir)*cv)
+      rhocv(ir) = rho1*cv
+      pz        = (bms - ak0)/dk0
+      rho2      = rho1*(1. + (prf(ir) - pz)/bms)
+ 
+      if(abs(rho2 - rho1) .gt. 0.00001*rho2) then
+         rho1 = rho2
+         if(j.lt.10) go to 80
+         if(mynum .eq. 0) write(6,85) ir
+ 85      format(" ***reference density calculation did not converge",
+     &          " for ir =",i3)
+         stop
+      else
+         rhorf(ir) = rho2
+      endif
+ 
+ 90   continue
+ 
+      go to 20
+ 
+ 100  continue
+ 
+      rho0 = 0.75*(am - corems)/(pi*(rshl(1)**3 - rshl(nr+1)**3))
+ 
+      if(mynum .eq. 0) write(6,120) rho0
+ 120  format(/' The mean mantle density is ',1pe11.4,' kg/m**3.'/)
+ 
+      if(mynum .eq. 0) write(6,200)
+ 200  format('     radius     density   temperature   pressure',
+     &       '    gravity   adiabatic K')
+      do 220 ir=1,nr+1
+      if(mynum .eq. 0) write(6,210) rshl(ir), rhorf(ir), tmprf(ir),
+     &                 prf(ir), grv(ir), rhorf(ir)/rhdks(ir)
+ 210  format(1p6e12.4)
+ 220  continue
+ 
+      if(mynum .eq. 0) write(6,230)
+ 230  format(/'     radius      alpha        cv        drho/dp ')
+      do 250 ir=1,nr+1
+      if(mynum .eq. 0) write(6,240)  rshl(ir), alpha(ir),
+     &                              rhocv(ir) /rhorf(ir), drhdp(ir)
+ 240  format(1p5e12.4)
+ 250  continue
+ 
+      end
+*dk randtemp
+      subroutine randtemp(temp,tmprf,index)
+ 
+c     This routine generates a random temperature field.
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real temp((nt+1)**2,nd,nr+1), tmprf(*)
+ 
+      if(index .le. 21) then
+ 
+         amp = randomnum(-(index + mynum))
+ 
+         do id=1,nd
+            do ii=1,(nt+1)**2
+               amp = 0.02*(randomnum(0) - 0.5)
+               do ir=2,nr
+                  temp(ii,id,ir) = temp(ii,id,ir) + amp*tmprf(ir)
+               end do
+            end do
+         end do
+ 
+      else
+ 
+         amp = 0.002*tmprf(nr/2)
+ 
+         do l=2,index-20
+            do m=1,l
+               phi = l**3 + m**2 + 2.
+               call harmonic(temp, l, m, amp, phi)
+            end do
+         end do
+ 
+      endif
+
+	end subroutine
+
+*dk subduct
+      subroutine subduct(temp,w,map,map2)
+ 
+c     This routine generates a constant initial temperature field
+c     except for depressed temperatures along the margin of Pangea.
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real temp(0:nt,nt+1,nd,*), w(0:nt,nt+1,nd,4)
+
+      common /radl/ rshl(nr+1), ird
+      common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+
+!	What is map2 ??? Investigate before using subduct again!
+	integer map(0:nt,nt+1,nd)
+	integer map2(0:nt,nt+1,nd)
+
+      call nulvec(w, (nt+1)**2*nd*4)
+ 
+c     Load first bank of array w with value one at nodes where
+c     there is continent.
+ 
+      do id=1,nd
+         do i2=1,nt+1
+            do i1=0,nt
+               if(map2(i1,i2,id).ge.1 .and.
+     &            map2(i1,i2,id).le.10) w(i1,i2,id,1) = 1.
+            end do
+         end do
+      end do
+ 
+c     Load second bank of array w with value one for ocean nodes that
+c     are adjacent to continent along certain coastal segments.  This
+c     represents the distribution of subducted slab at intermediate
+c     depths.
+ 
+      k1    = mt/16
+      kproc = mod(mynum, mproc)
+      i10   = mod(kproc, mt/nt)*nt
+      i20   = (kproc*nt/mt)*nt
+      id0   = (mynum/mproc)*nd
+ 
+      do id=1,nd
+ 
+         jd = id + id0
+ 
+         do i2=1,nt+1
+ 
+            i2m1 = max(i2-1, 1)
+            i2p1 = min(i2+1, nt+1)
+ 
+            do i1=0,nt
+ 
+               i1m1 = max(i1-1, 0)
+               i1p1 = min(i1+1, nt)
+ 
+               if(map(i1,i2,id).eq.50) w(i1,i2,id,2) = 1.
+ 
+               if(jd .eq. 9) go to 10
+               if(       i2+i20.lt.k1*6  .and. jd.eq.1 ) go to 10
+               if(i1+i10+i2+i20.gt.k1*15 .and. jd.eq.1 ) go to 10
+               if(i1+i10+i2+i20.gt.k1*17 .and. jd.eq.2 ) go to 10
+               if(       i2+i20.gt.k1*7  .and. jd.eq.6 ) go to 10
+               if(i1+i10+i2+i20.gt.k1*8  .and. jd.eq.7 ) go to 10
+ 
+               if(w(i1  ,i2  ,id,1).eq.0. .and.
+     &           (w(i1m1,i2  ,id,1).ne.0. .or.
+     &            w(i1p1,i2  ,id,1).ne.0. .or.
+     &            w(i1  ,i2m1,id,1).ne.0. .or.
+     &            w(i1  ,i2p1,id,1).ne.0. .or.
+     &            w(i1m1,i2p1,id,1).ne.0. .or.
+     &            w(i1p1,i2m1,id,1).ne.0.)) w(i1,i2,id,2) = 1.
+ 
+ 10            continue
+ 
+            end do
+ 
+         end do
+ 
+      end do
+ 
+      call comm3s(w(0,1,1,2),0,nt,1)
+ 
+c     Load third bank of array w with value one for ocean nodes that
+c     are adjacent to nonzero nodes of bank two of w.  This represents
+c     the distribution of subducting ocean lithosphere at the shallowest
+c     depths.
+ 
+c     Load fourth bank of array w with value one for continent nodes
+c     that are adjacent to ocean subduction.  This represents the
+c     more inboard distribution of cold slab at greatest depths.
+ 
+      do id=1,nd
+ 
+         do i2=1,nt+1
+ 
+            i2m1 = max(i2-1, 1)
+            i2p1 = min(i2+1, nt+1)
+ 
+            do i1=0,nt
+ 
+               i1m1 = max(i1-1, 0)
+               i1p1 = min(i1+1, nt)
+ 
+               if( w(i1  ,i2  ,id,1).eq.0. .and.
+     &            (w(i1  ,i2  ,id,2).ne.0. .or.
+     &             w(i1m1,i2  ,id,2).ne.0. .or.
+     &             w(i1p1,i2  ,id,2).ne.0. .or.
+     &             w(i1  ,i2m1,id,2).ne.0. .or.
+     &             w(i1  ,i2p1,id,2).ne.0. .or.
+     &             w(i1m1,i2p1,id,2).ne.0. .or.
+     &             w(i1p1,i2m1,id,2).ne.0.)) w(i1,i2,id,3) = 1.
+ 
+               if( w(i1  ,i2  ,id,1).eq.1. .and.
+     &            (w(i1m1,i2  ,id,2).ne.0. .or.
+     &             w(i1p1,i2  ,id,2).ne.0. .or.
+     &             w(i1  ,i2m1,id,2).ne.0. .or.
+     &             w(i1  ,i2p1,id,2).ne.0. .or.
+     &             w(i1m1,i2p1,id,2).ne.0. .or.
+     &             w(i1p1,i2m1,id,2).ne.0.)) w(i1,i2,id,4) = 1.
+ 
+               if((map(i1m1,i2  ,id).eq.50 .or.
+     &             map(i1p1,i2  ,id).eq.50 .or.
+     &             map(i1  ,i2m1,id).eq.50 .or.
+     &             map(i1  ,i2p1,id).eq.50 .or.
+     &             map(i1m1,i2p1,id).eq.50 .or.
+     &             map(i1p1,i2m1,id).eq.50)) w(i1,i2,id,4) = 1.
+ 
+            end do
+ 
+         end do
+ 
+      end do
+ 
+      call comm3s(w(0,1,1,3),1,nt,1)
+ 
+c     Reduce the temperature in the slab regions by an amount dtemp.
+ 
+      dtemp = 400.
+      if(nr .le. 16) nrl = 6
+      if(nr .ge. 32) nrl = 10*nr/32
+ 
+      do ir=2,nrl/2
+ 
+         jr  = ir + 1
+         kr  = ir + nrl/2
+         tmp = max(tav(ir) - dtemp, 320.)
+ 
+         do id=1,nd
+ 
+            jd = id + id0
+ 
+            do i2=1,nt+1
+               do i1=0,nt
+ 
+                  if(jd.eq.9) go to 20
+                  if(i1+i10.gt.k1*3  .and.
+     &               i1+i10.lt.k1*7  .and. jd.eq.10) go to 20
+                  if(i1+i10+i2+i20.le.k1*9  .and. jd.eq.7) go to 20
+ 
+                  if(w(i1,i2,id,3).ne.0. .and. ir.eq.2)
+     &               temp(i1,i2,id,ir) = tmp
+ 
+                  if(jd.eq.4 .or. jd.eq.7 .or. jd.eq.8) go to 20
+                  if(i1+i10.lt.k1*9  .and. jd.eq.3) go to 20
+                  if(i2+i20.gt.k1*3  .and. jd.eq.6) go to 20
+                  if(i1+i10.ge.k1*7  .and. jd.eq.10
+     &                               .and. jr.gt.3) go to 20
+                  if(jd.eq.3  .and. jr.gt.4) go to 20
+                  if(jd.eq.5  .and. jr.gt.4) go to 20
+c                 if(jd.eq.6  .and. jr.gt.5) go to 20
+c                 if(jd.eq.10 .and. jr.gt.5) go to 20
+ 
+                  if(w(i1,i2,id,2) .ne. 0.)
+     &               temp(i1,i2,id,jr) = tav(jr) - dtemp
+ 
+                  if(mt.eq.16) go to 20
+                  if(jd.eq.3 .or. jd.eq.5)  go to 20
+                  if(jd.eq.6 .or. jd.eq.10) go to 20
+ 
+                  if(w(i1,i2,id,4) .ne. 0.)
+     &               temp(i1,i2,id,kr) = tav(kr) - dtemp
+ 
+ 20               continue
+               end do
+            end do
+ 
+         end do
+ 
+      end do
+ 
+c     Restore the plate number to 16 in the western Pacific subduction
+c     zone where it temporarily had been set to 50.
+ 
+      do id=1,nd
+         do i2=1,nt+1
+            do i1=0,nt
+               if(map(i1,i2,id)==50) map(i1,i2,id) = 16
+            end do
+         end do
+      end do
+ 
+      end
+*dk tempconman
+      subroutine tempconman(temp,tcm)
+ 
+c     This routine creates the initial temperature field from an
+c     axisymmetric field generated by the 2-D code CONMAN.
+ 
+      include 'size.h'
+      real temp((nt+1)**2*nd,nr+1), tcm(33,81)
+      common /mesh/ xn((nt+1)**2*nd,3)
+ 
+      open (55, file='field.TT', status='old')
+ 
+      read (55, 10)
+ 10   format(/)
+ 
+      read (55, 20) tcm
+ 20   format(55x,1pe12.5)
+ 
+      close (55)
+ 
+      aa = 80./asin(1.)
+      mr = 32/nr
+ 
+      do ii=1,(nt+1)**2*nd
+ 
+         phi = aa*acos(abs(xn(ii,1)))
+         icm = phi
+         del = phi - icm
+         omd = 1.0 - del
+ 
+         do ir=1,nr+1
+ 
+            jr = 33 - mr*(ir - 1)
+ 
+            temp(ii,ir) = omd*tcm(jr,icm+1) + del*tcm(jr,icm+2) + 0.16
+ 
+         end do
+ 
+      end do
+
+	end subroutine
+
+
+*dk tempinit
+	subroutine tempinit(temp,index)
+ 
+c     This routine generates the initial temperature field.
+ 
+      include 'size.h'
+      real temp((nt+1)**2*nd,nr+1)
+      common /flds/ f(nv*8)
+      common /heat/ htop, hbot, hrad, heat, hshr, hvol, hnet, tnrm,
+     &              tav(129), qc(128)
+ 
+c     Generate reference temperature distribution.
+ 
+      do ir=1,nr+1
+         do ii=1,(nt+1)**2*nd
+            temp(ii,ir) = tav(ir)
+         end do
+      end do
+
+!	layers 1 and nr+1 are not influenced by inittemp, so
+!	here remains the value 'tav' 
+      if(index.le.10) call inittemp(temp,0.05*tav(nr/2+1),index)
+ 
+      if(index.eq.11) call initmoon(temp, 50.)
+ 
+!      if(index.eq.13) call subduct(temp,f,map,map2)
+ 
+      if(index.eq.14) call tempconman(temp,f)
+ 
+      if(index.eq.15) call tomog(temp,f)
+ 
+      if(index.ge.16 .and. index.lt.50) call randtemp(temp,tav,index)
+ 
+      if(index.eq.50) call geoidtest(temp)
+ 
+      call tempsmooth(temp)
+ 
+      call nuledge(temp,nd,nr,nt,1)
+ 
+      call comm3s(temp,nr,nt,1)
+
+	end subroutine
+
+
+*dk tempsmooth
+	subroutine tempsmooth(temp)
+ 
+c     This routine removes any degree one components from the
+c     temperature field such that the resulting buoyancy field
+c     sums in a vector sense to zero.
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real temp((nt+1)**2,nd,nr+1), s(3)
+      common /volm/ vol((nt+1)**2,(nr+1)*2)
+      common /mesh/ xn((nt+1)**2,nd,3)
+ 
+      do ir=2,nr
+ 
+         s(1) = 0.
+         s(2) = 0.
+         s(3) = 0.
+ 
+         do id=1,nd
+            do ii=1,(nt+1)**2
+               aa   = temp(ii,id,ir)*vol(ii,ir)
+               s(1) = s(1) + aa*xn(ii,id,1)
+               s(2) = s(2) + aa*xn(ii,id,2)
+               s(3) = s(3) + aa*xn(ii,id,3)
+            end do
+         end do
+ 
+         if(nproc .gt. 1) call psum(s,3)
+ 
+         ss = sqrt(s(1)**2 + s(2)**2 + s(3)**2)
+ 
+         if(ss .gt. 0.) then
+ 
+            t = 0.
+            do id=1,nd
+               do ii=1,(nt+1)**2
+                  t = t + (s(1)*xn(ii,id,1) + s(2)*xn(ii,id,2)
+     &                  +  s(3)*xn(ii,id,3))*vol(ii,ir)*xn(ii,id,1)
+               end do
+            end do
+ 
+            if(nproc .gt. 1) call psum(t,1)
+ 
+            if(t .ne. 0.) then
+ 
+               aa   = s(1)/t
+               s(1) = aa*s(1)
+               s(2) = aa*s(2)
+               s(3) = aa*s(3)
+ 
+               do id=1,nd
+                  do ii=1,(nt+1)**2
+                     aa   = s(1)*xn(ii,id,1) + s(2)*xn(ii,id,2)
+     &                    + s(3)*xn(ii,id,3)
+                     temp(ii,id,ir) = temp(ii,id,ir) - aa
+                  end do
+               end do
+ 
+            end if
+ 
+         end if
+ 
+      end do
+
+	end subroutine
+
+
+*dk tomog
+	subroutine tomog(temp,f)
+ 
+      include 'size.h'
+      parameter (lmax=32, nzmax=50)
+ 
+      real  temp((nt+1)**2*nd,nr+1), f((nt+1)**2*nd,nr+1)
+      real  har(2,(lmax+1)*(lmax+2)/2,nzmax), z(nzmax)
+      real shar(2,(lmax+1)*(lmax+2)/2,nr+1), plm((lmax+1)*(lmax+2))
+      common /mesh/ xn((nt+1)**2*nd,3)
+      common /radl/ rshl(nr+1), ird
+      common /prop/ ieos,  rho0, visc,  grav,  texpn, tcond,
+     &              sheat, hgen, tb(2), cl410, cl660
+      common /eos1/ rhorf(129), tmprf(129), drhdp(129), grv(129)
+      common /eos2/ rhocv(129), gamma(129), alpha(129), prf(129),
+     &               cond(129)
+ 
+c woo-sun -- choose either one for seismic tomography data.
+c     open(15,file='/home2/wyang/tomog/SKS12_WM13.dat')
+c     fac = 1.
+c     idens = 0
+ 
+c     open(15,file='/home2/wyang/tomog/VSEDSph.dat')
+c     fac = 1.e-2
+c     idens = 0
+ 
+      open(15,file='density.dat')
+      fac = 1.
+      idens = 1
+ 
+      read(15,*) nz, lmaximum
+      read(15,*) somevalue
+ 
+      if(idens.eq.1) then
+         do ii=0,(lmaximum+1)*(lmaximum+2)/2
+            read(15,*) somevalue
+         end do
+      end if
+ 
+      do iz=1,nz
+         read(15,*) ii, z(iz)
+         lm = 0
+         do l=0,lmaximum
+            fac = 1.
+            if(l.eq.0 .or. l.gt.20) fac = 0.
+            do m=0,l
+               lm = lm + 1
+               read(15,*) ll, mm, har(1,lm,iz), har(2,lm,iz)
+               har(1,lm,iz) = har(1,lm,iz)*fac
+               har(2,lm,iz) = har(2,lm,iz)*fac
+            end do
+         end do
+      end do
+ 
+      close(15)
+ 
+      call tomogintp(shar,har,z,lmaximum,lmax,nz)
+      call shtofe(f,shar,plm,lmaximum,lmax,nr)
+ 
+      if (idens.eq.1) then
+ 
+         dz = (rshl(1) - rshl(nr+1))/nz
+         do ir=1,nr+1
+            do ii=1,(nt+1)**2*nd
+               temp(ii,ir) = temp(ii,ir) - f(ii,ir)
+     &                     /(dz*rhorf(ir)*alpha(ir))
+            end do
+         end do
+ 
+      else
+ 
+         do ir=1,nr+1
+            if(rshl(1)-rshl(ir) .gt. 660.e3) return
+         end do
+         ir660 = ir - 1
+ 
+         do ir=1,ir660
+            vs2rho = 0.125*3.
+            a      = -vs2rho/texpn
+            do ii=1,(nt+1)**2*nd
+               temp(ii,ir) = temp(ii,ir) + a*f(ii,ir)
+            end do
+         end do
+ 
+         do ir=ir660+1,nr+1
+            vs2rho = 0.118*3.
+            a      = -vs2rho/texpn
+            do ii=1,(nt+1)**2*nd
+               temp(ii,ir) = temp(ii,ir) + a*f(ii,ir)
+            end do
+         end do
+ 
+      end if
+ 
+      end
+*dk tomogintp
+      subroutine tomogintp(shar,har,z,lmaximum,lmax,nz)
+ 
+      include 'size.h'
+      real har((lmax+1)*(lmax+2),nz), shar((lmax+1)*(lmax+2),nr+1)
+      real z(nz), d(nr+1)
+      common /radl/ rshl(nr+1), ird
+ 
+      lm = (lmaximum + 1)*(lmaximum + 2)
+ 
+      call nulvec(shar,(lmax+1)*(lmax+2)*(nr+1))
+ 
+      do ir=1,nr+1
+         d(ir) = (rshl(1) - rshl(ir))*1.e-3
+      end do
+ 
+c     If value at d(ir) which is less than z(1) is to be extrapolated
+c     using the values at z(1) and z(2), set irt to 0.  If it is set to
+c     the value at z(1), set irt to 1 and add necessary changes.
+ 
+      irt = 0
+      ir  = 1
+ 
+      do iz=1,nz
+ 10      if(ir.gt.nr+1) return
+ 
+         if(z(iz).ge.d(ir)) then
+ 
+            ir = ir + 1
+            goto 10
+ 
+         else
+ 
+            if(irt.ne.0) then
+ 
+               do jr=irt,ir-1
+                  x = (d(jr) - z(iz-1))/(z(iz) - z(iz-1))
+                  do k=1,lm
+                     shar(k,jr) = (1.- x)*har(k,iz-1) + x*har(k,iz)
+                  end do
+               end do
+ 
+               irt = ir
+ 
+            else
+ 
+               irt = 1
+ 
+            end if
+ 
+         end if
+ 
+      end do
+ 
+c woo-sun
+      do k=1,lm
+         shar(k,1) = har(k,1)
+      end do
+c woo-sun
+ 
+c     If value at d(ir) which is larger than z(nz) is to be extrapolated
+c     using the values at z(nz-1) and z(nz), set iz to nz.  If it is set to
+c     the value at z(nz), add necessary changes.
+ 
+      iz = nz
+      do jr=irt,nr+1
+         x = (d(jr) - z(iz-1))/(z(iz) - z(iz-1))
+         do k=1,lm
+            shar(k,jr) = (1.- x)*har(k,iz-1) + x*har(k,iz)
+         end do
+      end do
+ 
+	end subroutine
+
+
+*dk tophat
+      subroutine tophat(t,u)
+ 
+c     This routine generates a tophat scalar field t and a zonal
+c     velocity field u for testing the transport algorithm.
+ 
+      include 'size.h'
+      real  t((nt+1)**2*nd,*), u((nt+1)**2*nd,3,*)
+      common /mesh/ xn((nt+1)**2*nd,3)
+      common /radl/ rshl(nr+1), ird
+ 
+      do ir=1,nr+1
+         r = rshl(ir)/rshl(1)
+         do ii=1,(nt+1)**2*nd
+            if((r*xn(ii,1) - 0.78)**2 + (r*xn(ii,2))**2
+     &                                + (r*xn(ii,3))**2 .lt. 0.04) then
+               t(ii,ir) = 1.
+            else
+               t(ii,ir) = 0.
+            endif
+            u(ii,1,ir) = -rshl(ir)*xn(ii,2)
+            u(ii,2,ir) =  rshl(ir)*xn(ii,1)
+            u(ii,3,ir) =  0.
+         end do
+      end do
+ 
+	end subroutine
+
+
+*dk bdcvinit
+      blockdata bdcvinit
+ 
+      common /mors/ rhor(4), bmod(4), dbmd(4), cvmor, gammor
+      data rhor/  3425.,   3695.,   3725.,   4220./
+      data bmod/1.40e11, 1.60e11, 1.60e11, 2.60e11/
+      data dbmd/   5.00,    4.00,    4.00,    3.85/
+      data cvmor/1371./, gammor/1.05/
+ 
+      common /refr/ pi, gc, corems, nslc
+      data pi/3.141592653589793/, gc/6.6732e-11/, corems/1.938e24/
+      data nslc/50/
+ 
+      common /murn/ rho00, ak0, dk0, ttop, cpmurn, thcond
+      data rho00/3.500e3/, ak0/1.15183e11/, dk0/3.50/, ttop/1800./
+      data cpmurn/1200./, thcond/5.00/
+ 
+      end blockdata

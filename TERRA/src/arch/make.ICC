@@ -1,0 +1,22 @@
+# -----------------------------------------------------------------------------
+#    Parameters for compilation with INTEL's compiler suite under LINUX
+# -----------------------------------------------------------------------------
+
+CC      = icc
+FC      = ifort
+LK      = ifort
+FFLAGS  = -fpp -r8 -align dcommons -O3 -I/usr/include/openmpi -132 $(VTKW_MACRO)
+LFLAGS  = -L/usr/lib/openmpi/lib
+LIBS    = -lmpi_f77 $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -strict-ansi -O3 -I/usr/include/openmpi $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

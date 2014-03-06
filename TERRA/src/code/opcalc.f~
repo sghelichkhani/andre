@@ -1,0 +1,758 @@
+*DK oprupdate
+	subroutine oprupdate
+!	This routine updates the viscosity variation array vvsc and
+!	the viscosity-dependent operator arrays.
+ 
+	include 'size.h'
+	include 'pcom.h'
+
+	integer, parameter:: nxm=4000+(nt+1)**2*41
+	integer, parameter:: nopr=(nt/2+1)**2*ndo*189*(nr/2+1)*7/5+8000
+
+	common /fopr/ opr(nopr), oprd(nv*ndo/nd*9), b(nv*ndo/nd*18*5/4),
+     &              mopr(0:10), mb(0:10)
+	common /wght/ mrw(0:10), rw(nv*ndo/nd*7/5),
+     &              mhw(0:10), hw(nv*ndo/nd*7/5)
+	common /flds/ f(nv*8)
+	common /mgwk/ w(nv*5)
+	common /velo/ upb(nt+1), u(nv*3),  upe(nt+1)
+	common /temp/ tpb(nt+1), temp(nv), tpe(nt+1)
+	common /vis0/ vb(nt+1), vv(nv,2), ve(nt+1)
+	common /vis1/ vscmax, rvscscl, tvscscl, pwrlawn, pwrlawsr, yldstrs
+	common /cycl/ time, tstep, step
+	common /opwt/ wd, wm
+	common /call/ ncall
+	common /clck/ itmng, sec(50), nop(50)
+
+	integer map(0:nt,nt+1,nd)
+
+	call mytime(tin)
+ 
+      if(ncall.gt.1 .and. vscmax.eq.0.) return
+ 
+      if(ncall.gt.1 .and. rvscscl.lt.0. .and. tvscscl.eq.0.) return
+ 
+      if(ncall.eq.1) step = min(0.001, step)
+ 
+      if(ncall.le.7 .and. mod(ncall, 3).ne.1) return
+      if(ncall.gt.7 .and. mod(ncall,10).ne.1) return
+ 
+      if((nt+1)**2*189*3 .gt. 8*nv) then
+         if(mynum .eq. 0) print *, 'STOP -- In oprupdate, ',
+     &      'array f is not large enough to call coarseopr.'
+         stop
+      end if
+ 
+      lvf = 1.45*log(real(mt))
+      lvr = 1.45*log(real(nr))
+      lvg = 1.45*log(real(mt/nt))
+      wd  = 1.
+      wm  = 0.
+ 
+      call viscset
+ 
+c...  Compute the lateral viscosity variation at the finest grid level.
+ 
+      call viscalc(vv,temp,u,f)
+ 
+c...  Overwrite vvsc with its square root for easy application in
+c...  the finite element operators.
+ 
+      do ii=1,nv
+         vv(ii,1) = sqrt(vv(ii,1))
+         vv(ii,2) =   1./vv(ii,1)
+      end do
+ 
+c...  Compute diagonal tensor for operator at finest grid level.
+ 
+      call diagcalc(oprd,vv,f)
+ 
+      if(ncall .eq. 1) call nulvec(b, mb(lvf+1)-1)
+ 
+c...  Project the forward operator to the lower grid levels.  Use lower
+c...  part of opr array as scratch storage for computing b array.
+ 
+      do lv=lvf,1,-1
+ 
+         kr = 2**max(0, lv - lvf + lvr)
+         kt = 2**max(0, lv - lvg)
+ 
+         if(lv .eq. lvf) then
+ 
+            call jassmbl1(opr,oprd,f)
+ 
+            call hwcalc(hw(mhw(lvf-1)),opr,nr,nt)
+ 
+            call rwcalc(rw(mrw(lvf-1)),opr,nr,nt)
+ 
+            call jcbfact(b(mb(lvf)),opr,nr,nt)
+ 
+            call coarseopr(opr(mopr(lv-1)),f,oprd,
+     &                     rw(mrw(lv-1)),hw(mhw(lv-1)),w,1,nr,nt)
+ 
+            call dminusa(oprd,f)
+ 
+         else
+ 
+            if(lv .ge. lvg+1) then
+ 
+               call jassmbl(opr,opr(mopr(lv)),f,kr,kt)
+ 
+               call hwcalc(hw(mhw(lv-1)),opr,kr,kt)
+ 
+               if(kr .gt. 1) call rwcalc(rw(mrw(lv-1)),opr,kr,kt)
+ 
+               call jcbfact(b(mb(lv)),opr,kr,kt)
+ 
+               call coarseopr(opr(mopr(lv-1)),opr(mopr(lv)),oprd,
+     &                        rw(mrw(lv-1)),hw(mhw(lv-1)),f,ndo,kr,kt)
+ 
+            else
+ 
+               if(mynum .lt. mproc*10/nd) then
+ 
+                  call jassmbl(opr,opr(mopr(lv)),f,kr,1)
+ 
+                  call jcbfact(b(mb(lv)),opr,kr,1)
+ 
+                  call pcom1to4(w,opr(mopr(lv)),lv,kr,189)
+ 
+               endif
+ 
+               lvproc = lv - 1
+               mproc  = 2**(2*lvproc)
+ 
+               if(mynum .lt. mproc*10/nd) then
+ 
+                  call jassmbl(f,w,f(7*nv),kr,2)
+ 
+                  call hwcalc(hw(mhw(lv-1)),f,kr,2)
+ 
+                  if(kr .gt. 1) call rwcalc(rw(mrw(lv-1)),f,kr,2)
+ 
+                  call coarseopr(opr(mopr(lv-1)),w,oprd,
+     &                           rw(mrw(lv-1)),hw(mhw(lv-1)),f,ndo,kr,2)
+ 
+               endif
+ 
+            endif
+ 
+            call reordera(opr(mopr(lv)),f,w,ndo,kr,kt)
+ 
+         endif
+ 
+      end do
+ 
+      if(ndo .eq. 1) then
+         do ir=1,2
+            jj = (ir - 1)*756
+            do id=1,nd
+               kk = (id - 1)*756 + jj*nd
+               do ii=1,756
+                  f(kk+ii) = opr(jj+ii)
+               end do
+            end do
+         end do
+         call scopy(1512*nd,f,1,opr,1)
+      end if
+ 
+      if(nd.ne.10 .and. mynum.lt.mproc*10/nd) then
+         call scopy(1512*nd,opr,1,f,1)
+         call pcomtozero(opr,f,378)
+      end if
+ 
+      if(mynum .eq. 0) call reordera(opr,f,w,10,1,1)
+ 
+      if(mynum==0) call pseugen(3)
+ 
+      lvproc = lvg
+      mproc  = 2**(2*lvproc)
+      msgnum = 1
+ 
+c     if(mynum .eq. 0) then
+c        write(6,'("hw:")')
+c        do lv=0,lvf-1
+c           kr = 2**max(0, lv - lvf + lvr)
+c           kt = 2**max(0, lv - lvg)
+c           n1 = (kt+1)**2*6*(kr+1) - 1
+c           write(6,'("lv =",i2)') lv
+c           write(6,'(1p5e12.4)') (hw(mhw(lv)+ii),ii=0,n1)
+c        end do
+c     end if
+ 
+      call mytime(tout)
+      sec(2) = sec(2) + tout - tin
+
+	end subroutine
+      
+      
+*dk brotate
+      subroutine brotate(b,kr,kt)
+ 
+c...  This routine rotates the operator b from diamond 1 to
+c...  the appropriate diamond.
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real b((kt+1)**2,nd,6,3,kr+1), w(3,3,2), d(3,3)
+      common /rttn/ phi(10), trtn(3,3,10)
+ 
+      id0 = (mynum/mproc)*nd
+ 
+      do id=1,nd
+ 
+         jd = id + id0
+ 
+         if(jd .ne. 1) then
+ 
+            do ir=1,kr+1
+ 
+            do ii=1,(kt+1)**2
+ 
+               call nulvec(w, 18)
+ 
+               d(1,1) = b(ii,id,6,1,ir)
+               d(1,2) = b(ii,id,5,2,ir)
+               d(1,3) = b(ii,id,4,3,ir)
+               d(2,1) = d(1,2)
+               d(2,2) = b(ii,id,6,2,ir)
+               d(2,3) = b(ii,id,5,3,ir)
+               d(3,1) = d(1,3)
+               d(3,2) = d(2,3)
+               d(3,3) = b(ii,id,6,3,ir)
+ 
+               do i=1,3
+                  do k=1,3
+ 
+                     n1 = 3 + i - k
+ 
+                     w(i,1,1) = w(i,1,1) + b(ii,id,n1,k,ir)*trtn(1,k,jd)
+                     w(i,2,1) = w(i,2,1) + b(ii,id,n1,k,ir)*trtn(2,k,jd)
+                     w(i,3,1) = w(i,3,1) + b(ii,id,n1,k,ir)*trtn(3,k,jd)
+                     w(i,1,2) = w(i,1,2) +           d(i,k)*trtn(1,k,jd)
+                     w(i,2,2) = w(i,2,2) +           d(i,k)*trtn(2,k,jd)
+                     w(i,3,2) = w(i,3,2) +           d(i,k)*trtn(3,k,jd)
+ 
+                  end do
+               end do
+ 
+               call nulvec(d, 9)
+ 
+               b(ii,id,1,1,ir) = 0.
+               b(ii,id,2,1,ir) = 0.
+               b(ii,id,3,1,ir) = 0.
+               b(ii,id,4,1,ir) = 0.
+               b(ii,id,5,1,ir) = 0.
+               b(ii,id,1,2,ir) = 0.
+               b(ii,id,2,2,ir) = 0.
+               b(ii,id,3,2,ir) = 0.
+               b(ii,id,4,2,ir) = 0.
+               b(ii,id,1,3,ir) = 0.
+               b(ii,id,2,3,ir) = 0.
+               b(ii,id,3,3,ir) = 0.
+ 
+               do j=1,3
+                  do i=1,3
+ 
+                     n1 = 3 + i - j
+ 
+                     b(ii,id,n1,j,ir) = b(ii,id,n1,j,ir)
+     &                                + trtn(i,1,jd)*w(1,j,1)
+     &                                + trtn(i,2,jd)*w(2,j,1)
+     &                                + trtn(i,3,jd)*w(3,j,1)
+                     d(i,j)           = d(i,j)
+     &                                + trtn(i,1,jd)*w(1,j,2)
+     &                                + trtn(i,2,jd)*w(2,j,2)
+     &                                + trtn(i,3,jd)*w(3,j,2)
+ 
+                  end do
+               end do
+ 
+               b(ii,id,6,1,ir) = d(1,1)
+               b(ii,id,5,2,ir) = d(1,2)
+               b(ii,id,6,2,ir) = d(2,2)
+               b(ii,id,4,3,ir) = d(1,3)
+               b(ii,id,5,3,ir) = d(2,3)
+               b(ii,id,6,3,ir) = d(3,3)
+ 
+            end do
+ 
+            end do
+ 
+         end if
+ 
+      end do
+ 
+      end
+*dk diagcalc
+      subroutine diagcalc(d,vv,w)
+ 
+c...  This routine assembles the diagonal tensor d of the variable
+c...  viscosity operator at the finest grid level.
+ 
+      include 'size.h'
+      real d((nt+1)**2,ndo,9,nr+1)
+      real vv((nt+1)**2,nd,nr+1,2), w((nt+1)**2)
+      common /oper/ ra(3,8,nr+1), alp(7,(nt+1)**2,2),
+     &              atn(4,7,(nt+1)**2,9)
+      common /ofst/ j1n(7), j2n(7), md(7)
+ 
+      call nulvec(d, 9*ndo*(nt+1)**2*(nr+1))
+ 
+      do ir=1,nr+1
+ 
+         kb = 1
+         ke = 3
+         if(ir.eq.1)    kb = 2
+         if(ir.eq.nr+1) ke = 2
+ 
+         do k=kb,ke
+            m1 = 1
+            if(k .eq. 2) m1 = 2
+            jr = ir + k - 2
+            do m=m1,7
+               jj = j1n(m) + j2n(m)*(nt+1)
+               do j=1,9
+                  do ii=1,(nt+1)**2
+                     w(ii) = ((((ra(k,1,ir)*atn(1,m,ii,j))
+     &                         + ra(k,2,ir)*atn(2,m,ii,j))
+     &                         + ra(k,3,ir)*atn(3,m,ii,j))
+     &                         + ra(k,4,ir)*atn(4,m,ii,j))
+                  end do
+                  do id=1,ndo
+                     do ii=1,(nt+1)**2
+                        d(ii,id,j,ir) = d(ii,id,j,ir)
+     &                                - w(ii)*vv(ii+jj,id,jr,1)
+                     end do
+                  end do
+               end do
+            end do
+         end do
+ 
+         do id=1,ndo
+            do ii=1,(nt+1)**2
+               d(ii,id,1,ir) = d(ii,id,1,ir)*vv(ii,id,ir,2)
+               d(ii,id,2,ir) = d(ii,id,2,ir)*vv(ii,id,ir,2)
+               d(ii,id,3,ir) = d(ii,id,3,ir)*vv(ii,id,ir,2)
+               d(ii,id,4,ir) = d(ii,id,4,ir)*vv(ii,id,ir,2)
+               d(ii,id,5,ir) = d(ii,id,5,ir)*vv(ii,id,ir,2)
+               d(ii,id,6,ir) = d(ii,id,6,ir)*vv(ii,id,ir,2)
+               d(ii,id,7,ir) = d(ii,id,7,ir)*vv(ii,id,ir,2)
+               d(ii,id,8,ir) = d(ii,id,8,ir)*vv(ii,id,ir,2)
+               d(ii,id,9,ir) = d(ii,id,9,ir)*vv(ii,id,ir,2)
+            end do
+         end do
+ 
+c...     Enforce symmetry at the boundaries.
+ 
+         if(ir.eq.1 .or. ir.eq.nr+1) then
+            do id=1,ndo
+               do ii=1,(nt+1)**2
+                  d(ii,id,2,ir) = 0.5*(d(ii,id,2,ir) + d(ii,id,4,ir))
+                  d(ii,id,4,ir) =      d(ii,id,2,ir)
+                  d(ii,id,3,ir) = 0.5*(d(ii,id,3,ir) + d(ii,id,7,ir))
+                  d(ii,id,7,ir) =      d(ii,id,3,ir)
+                  d(ii,id,6,ir) = 0.5*(d(ii,id,6,ir) + d(ii,id,8,ir))
+                  d(ii,id,8,ir) =      d(ii,id,6,ir)
+               end do
+            end do
+         end if
+ 
+      end do
+ 
+      end
+*dk dminusa
+      subroutine dminusa(d,w)
+ 
+c...  This routine subtracts the diagonal tensor elements of the constant
+c...  viscosity operator a from the diagonal tensor d to compensate for
+c...  the fact that in routine oprxuf where d is applied to the field u,
+c...  the diagonal part of a has already been applied to u.
+ 
+      include 'size.h'
+      real d((nt+1)**2,ndo,9,nr+1), w((nt+1)**2)
+      common /oper/ ra(3,8,nr+1), alp(7,(nt+1)**2,2),
+     &              atn(4,7,(nt+1)**2,9)
+ 
+      do ir=1,nr+1
+ 
+         do j=1,9
+            do ii=1,(nt+1)**2
+               w(ii) = ((((ra(2,1,ir)*atn(1,1,ii,j))
+     &                   + ra(2,2,ir)*atn(2,1,ii,j))
+     &                   + ra(2,3,ir)*atn(3,1,ii,j))
+     &                   + ra(2,4,ir)*atn(4,1,ii,j))
+            end do
+ 
+            do id=1,ndo
+               do ii=1,(nt+1)**2
+                  d(ii,id,j,ir) = d(ii,id,j,ir) - w(ii)
+               end do
+            end do
+         end do
+ 
+      end do
+ 
+      end
+*dk hwcalc
+      subroutine hwcalc(hw,b,kr,kt)
+ 
+c...  This routine determines lateral interpolation factors.
+ 
+      include 'size.h'
+      real hw(2:7,kt/2+1,kt/2+1,ndo,*)
+      real b(kt+1,kt+1,ndo,18*(kr+1))
+      common /call/ ncall
+ 
+      nrc  = (kr+1)/2
+      ntc  = kt/2
+      nrcp = nrc + 1
+      ntcp = ntc + 1
+ 
+      if(ncall .eq. 1) call nulvec(hw, ntcp*ntcp*6*ndo*nrcp)
+ 
+      n0 = 36
+      if(kr .eq. 1) n0 = 18
+ 
+      do ir=1,nrc+1
+ 
+         n1 = (n0*(ir - 1)) + 6
+         n2 = (n0*(ir - 1)) + 12
+         n3 = (n0*(ir - 1)) + 18
+ 
+         do id=1,ndo
+ 
+            do i2=1,ntc
+ 
+               j2 = i2 + i2 - 1
+ 
+               do i1=2,ntcp
+ 
+                  j1 = i1 + i1 - 1
+ 
+                  a1 = 0.5/(b(j1-1,j2  ,id,n1)
+     &                    + b(j1-1,j2  ,id,n2)
+     &                    + b(j1-1,j2  ,id,n3))
+                  a2 = 0.5/(b(j1-1,j2+1,id,n1)
+     &                    + b(j1-1,j2+1,id,n2)
+     &                    + b(j1-1,j2+1,id,n3))
+                  a3 = 0.5/(b(j1  ,j2+1,id,n1)
+     &                    + b(j1  ,j2+1,id,n2)
+     &                    + b(j1  ,j2+1,id,n3))
+ 
+                  hw(2,i1-1,i2  ,id,ir) = (b(j1-2,j2  ,id,n1)
+     &                                  +  b(j1-2,j2  ,id,n2)
+     &                                  +  b(j1-2,j2  ,id,n3))*a1
+                  hw(3,i1  ,i2  ,id,ir) = (b(j1  ,j2  ,id,n1)
+     &                                  +  b(j1  ,j2  ,id,n2)
+     &                                  +  b(j1  ,j2  ,id,n3))*a3
+                  hw(4,i1  ,i2  ,id,ir) = (b(j1  ,j2  ,id,n1)
+     &                                  +  b(j1  ,j2  ,id,n2)
+     &                                  +  b(j1  ,j2  ,id,n3))*a2
+                  hw(5,i1  ,i2  ,id,ir) = (b(j1  ,j2  ,id,n1)
+     &                                  +  b(j1  ,j2  ,id,n2)
+     &                                  +  b(j1  ,j2  ,id,n3))*a1
+                  hw(6,i1  ,i2+1,id,ir) = (b(j1  ,j2+2,id,n1)
+     &                                  +  b(j1  ,j2+2,id,n2)
+     &                                  +  b(j1  ,j2+2,id,n3))*a3
+                  hw(7,i1-1,i2+1,id,ir) = (b(j1-2,j2+2,id,n1)
+     &                                  +  b(j1-2,j2+2,id,n2)
+     &                                  +  b(j1-2,j2+2,id,n3))*a2
+ 
+               end do
+ 
+            end do
+ 
+            do i2=1,ntc
+               j2 = i2 + i2 - 1
+               a3 = 0.5/(b(1,j2+1,id,n1)
+     &                 + b(1,j2+1,id,n2)
+     &                 + b(1,j2+1,id,n3))
+               hw(3,1,i2  ,id,ir) = (b(1,j2  ,id,n1)
+     &                            +  b(1,j2  ,id,n2)
+     &                            +  b(1,j2  ,id,n3))*a3
+               hw(6,1,i2+1,id,ir) = (b(1,j2+2,id,n1)
+     &                            +  b(1,j2+2,id,n2)
+     &                            +  b(1,j2+2,id,n3))*a3
+            end do
+ 
+            i2 = ntcp
+            j2 = kt + 1
+ 
+            do i1=2,ntcp
+               j1 = i1 + i1 - 1
+               a1 = 0.5/(b(j1-1,j2,id,n1)
+     &                 + b(j1-1,j2,id,n2)
+     &                 + b(j1-1,j2,id,n3))
+               hw(2,i1-1,i2,id,ir) = (b(j1-2,j2,id,n1)
+     &                             +  b(j1-2,j2,id,n2)
+     &                             +  b(j1-2,j2,id,n3))*a1
+               hw(5,i1  ,i2,id,ir) = (b(j1  ,j2,id,n1)
+     &                             +  b(j1  ,j2,id,n2)
+     &                             +  b(j1  ,j2,id,n3))*a1
+            end do
+ 
+         end do
+ 
+      end do
+ 
+      end
+*dk jassmbl1
+      subroutine jassmbl1(b,d,w)
+ 
+ 
+c...  Assemble forward operator.
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real b((nt+1)**2,ndo,6,3,nr+1), w((nt+1)**2,nd,6,3)
+      real d((nt+1)**2,ndo,9,nr+1), a((nt+1)**2,9)
+      common /oper/ ra(3,8,nr+1), alp(7,(nt+1)**2,2),
+     &              atn(4,7,(nt+1)**2,9)
+ 
+      do ir=1,nr+1
+ 
+         call nulvec(w,(nt+1)**2*nd*18)
+ 
+         do id=1,nd
+            jd = min(ndo, id)
+            do ii=1,(nt+1)**2
+               w(ii,id,6,1) = d(ii,jd,1,ir)
+               w(ii,id,5,2) = d(ii,jd,2,ir)
+               w(ii,id,6,2) = d(ii,jd,5,ir)
+               w(ii,id,4,3) = d(ii,jd,3,ir)
+               w(ii,id,5,3) = d(ii,jd,6,ir)
+               w(ii,id,6,3) = d(ii,jd,9,ir)
+            end do
+         end do
+ 
+         if(ir .ge. 2) then
+ 
+            do j=1,9
+               do ii=1,(nt+1)**2
+                  a(ii,j) = ((((ra(3,1,ir-1)*atn(1,1,ii,j))
+     &                        + ra(3,2,ir-1)*atn(2,1,ii,j))
+     &                        + ra(3,3,ir-1)*atn(3,1,ii,j))
+     &                        + ra(3,4,ir-1)*atn(4,1,ii,j))
+               end do
+            end do
+ 
+            do id=1,nd
+               do ii=1,(nt+1)**2
+                  w(ii,id,3,1) = a(ii,1)
+                  w(ii,id,2,2) = a(ii,2)
+                  w(ii,id,1,3) = a(ii,3)
+                  w(ii,id,4,1) = a(ii,4)
+                  w(ii,id,3,2) = a(ii,5)
+                  w(ii,id,2,3) = a(ii,6)
+                  w(ii,id,5,1) = a(ii,7)
+                  w(ii,id,4,2) = a(ii,8)
+                  w(ii,id,3,3) = a(ii,9)
+               end do
+            end do
+ 
+         end if
+ 
+         call brotate(w,0,nt)
+
+         call comm3s( w,0, nt, 18 )
+
+         do k=1,6
+            do id=1,ndo
+               do ii=1,(nt+1)**2
+                  b(ii,id,k,1,ir) = w(ii,id,k,1)
+                  b(ii,id,k,2,ir) = w(ii,id,k,2)
+                  b(ii,id,k,3,ir) = w(ii,id,k,3)
+               end do
+            end do
+         end do
+ 
+      end do
+ 
+      end
+*dk jassmbl
+      subroutine jassmbl(b,a,w,kr,kt)
+ 
+c...  Assemble forward operator.
+ 
+      include 'size.h'
+      real b((kt+1)**2,ndo,6,3,kr+1), w((kt+1)**2,nd,6,3)
+      real a((kt+1)**2,ndo,9,7,3,kr+1)
+ 
+      do ir=1,kr+1
+ 
+         call nulvec(w,(kt+1)**2*nd*18)
+ 
+         do id=1,nd
+            jd = min(ndo, id)
+            do ii=1,(kt+1)**2
+               w(ii,id,6,1) = a(ii,jd,1,1,2,ir)
+               w(ii,id,5,2) = a(ii,jd,2,1,2,ir)
+               w(ii,id,6,2) = a(ii,jd,5,1,2,ir)
+               w(ii,id,4,3) = a(ii,jd,3,1,2,ir)
+               w(ii,id,5,3) = a(ii,jd,6,1,2,ir)
+               w(ii,id,6,3) = a(ii,jd,9,1,2,ir)
+            end do
+         end do
+ 
+         if(ir .ge. 2) then
+ 
+            do id=1,nd
+               jd = min(ndo, id)
+               do ii=1,(kt+1)**2
+                  w(ii,id,3,1) = a(ii,jd,1,1,3,ir-1)
+                  w(ii,id,2,2) = a(ii,jd,2,1,3,ir-1)
+                  w(ii,id,1,3) = a(ii,jd,3,1,3,ir-1)
+                  w(ii,id,4,1) = a(ii,jd,4,1,3,ir-1)
+                  w(ii,id,3,2) = a(ii,jd,5,1,3,ir-1)
+                  w(ii,id,2,3) = a(ii,jd,6,1,3,ir-1)
+                  w(ii,id,5,1) = a(ii,jd,7,1,3,ir-1)
+                  w(ii,id,4,2) = a(ii,jd,8,1,3,ir-1)
+                  w(ii,id,3,3) = a(ii,jd,9,1,3,ir-1)
+               end do
+            end do
+ 
+         end if
+ 
+         call brotate(w,0,kt)
+ 
+         call comm3s(w,0,kt,18)
+ 
+         do k=1,6
+            do id=1,ndo
+               do ii=1,(kt+1)**2
+                  b(ii,id,k,1,ir) = w(ii,id,k,1)
+                  b(ii,id,k,2,ir) = w(ii,id,k,2)
+                  b(ii,id,k,3,ir) = w(ii,id,k,3)
+               end do
+            end do
+         end do
+ 
+      end do
+ 
+      end
+*dk jcbfact
+      subroutine jcbfact(b,c,kr,kt)
+ 
+c...  Factor the forward operator along a radial column of nodes.
+ 
+      include 'size.h'
+      include 'pcom.h'
+      real b(6,3*(kr+1),0:kt,kt+1,ndo), c(0:kt,kt+1,ndo,6,3*(kr+1))
+ 
+      iproc = mod(mynum, mproc)
+      id0   = (mynum/mproc)*nd
+ 
+      do id=1,ndo
+ 
+         do i2=1,kt
+ 
+         i1b = 1
+         if(iproc.eq.0 .and. mod(id+id0, 5).eq.1 .and. i2.eq.1) i1b = 0
+ 
+            do i1=i1b,kt
+ 
+               do i=1,6
+                  do j=1,3*(kr+1)
+                     b(i,j,i1,i2,id) = -c(i1,i2,id,i,j)
+                  end do
+               end do
+ 
+               call spbfa(b(1,1,i1,i2,id),6,3*(kr+1),5,info)
+ 
+               if(info .ne. 0) write(6, 10) mynum, kr, i1, i2, id, info
+ 10            format(" JCBFACT: mynum,kr,i1,i2,id =",5i3,"  info =",i4)
+ 
+               do k=1,3*(kr+1)
+                  b(6,k,i1,i2,id) = 1./b(6,k,i1,i2,id)
+               end do
+ 
+            end do
+ 
+         end do
+ 
+      end do
+ 
+      end
+*dk reordera
+      subroutine reordera(a,r,s,nd,nr,nt)
+ 
+      real a((nt+1)**2*nd*9*7,3*(nr+1))
+      real r((nt+1)**2*nd*9,7), s(7,(nt+1)**2*nd*9)
+ 
+      do jj=1,3*(nr+1)
+ 
+        call scopy((nt+1)**2*nd*9*7,a(1,jj),1,r,1)
+ 
+        do ii=1,(nt+1)**2*nd*9
+           s(1,ii) = r(ii,1)
+           s(2,ii) = r(ii,2)
+           s(3,ii) = r(ii,3)
+           s(4,ii) = r(ii,4)
+           s(5,ii) = r(ii,5)
+           s(6,ii) = r(ii,6)
+           s(7,ii) = r(ii,7)
+         end do
+ 
+        call scopy((nt+1)**2*nd*9*7,s,1,a(1,jj),1)
+ 
+      end do
+ 
+      end
+*dk rwcalc
+      subroutine rwcalc(rw,b,kr,kt)
+ 
+c...  This routine determines radial interpolation factors.
+ 
+      include 'size.h'
+      real rw(2,ndo*(kt+1)**2,*), b((kt+1)**2*ndo,6,3*(kr+1))
+      common /radl/ rshl(nr+1), ird
+      common /call/ ncall
+ 
+      if(ncall .eq. 1) then
+ 
+         do ii=1,ndo*(kt+1)**2
+            rw(1,ii,1)      = 0.
+            rw(2,ii,kr/2+1) = 0.
+         end do
+ 
+      endif
+ 
+      lr = nr/kr
+ 
+      do ir=1,kr/2
+ 
+         jr = ir + ir - 1
+         b0 = rshl(1+(jr-1)*lr) - rshl(1+(jr+1)*lr)
+ 
+         if(ir.eq.1) then
+            b1 = b0/(rshl(1          ) - rshl(1+       lr))
+         else
+            b1 = b0/(rshl(1+(jr-2)*lr) - rshl(1+(jr  )*lr))
+         endif
+ 
+         if(ir.eq.kr/2) then
+            b2 = b0/(rshl(1+(jr  )*lr) - rshl(1+(jr+1)*lr))
+         else
+            b2 = b0/(rshl(1+(jr  )*lr) - rshl(1+(jr+2)*lr))
+         endif
+ 
+         n1 = 6*ir - 5
+         n2 = 6*ir - 4
+         n3 = 6*ir - 3
+         n4 = 6*ir - 2
+         n5 = 6*ir - 1
+         n6 = 6*ir
+         n7 = 6*ir + 1
+         n8 = 6*ir + 2
+         n9 = 6*ir + 3
+ 
+         do ii=1,(kt+1)**2*ndo
+            a       = 0.5 / (b(ii,6,n4) + b(ii,6,n5) + b(ii,6,n6))
+            rw(2,ii,ir)   = (b(ii,6,n1) + b(ii,6,n2) + b(ii,6,n3))*a*b1
+            rw(1,ii,ir+1) = (b(ii,6,n7) + b(ii,6,n8) + b(ii,6,n9))*a*b2
+         end do
+ 
+      end do
+ 
+      end

@@ -1,0 +1,23 @@
+# -----------------------------------------------------------------------------
+#    Parameters for compilation with INTEL's compiler suite under LINUX
+#    on the SGI Altix 3700 Bx2 of the LRZ in Munich
+# -----------------------------------------------------------------------------
+
+CC      = mpicc
+FC      = mpif77
+LK      = mpif77
+FFLAGS  = -fpp -r8 -align dcommons -O3 -tpp2 $(VTKW_MACRO)
+LFLAGS  =
+LIBS    = $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -strict-ansi -O3 $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

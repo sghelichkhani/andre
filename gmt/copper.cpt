@@ -1,0 +1,6 @@
+#	$Id: copper.cpt 8899 2011-07-27 01:59:56Z pwessel $
+#
+# Simulates the COPPER colormap in Matlab
+#
+0		0/0/0		0.796875	255/159/102
+0.796875	255/159/102	1		255/200/128

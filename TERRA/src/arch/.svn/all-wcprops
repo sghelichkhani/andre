@@ -1,0 +1,53 @@
+K 25
+svn:wc:ra_dav:version-url
+V 47
+/svn/terra/!svn/ver/232/trunk/3D-Terra/src/arch
+END
+make.OpenMPI
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/terra/!svn/ver/215/trunk/3D-Terra/src/arch/make.OpenMPI
+END
+make.TethysGCC
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/terra/!svn/ver/217/trunk/3D-Terra/src/arch/make.TethysGCC
+END
+make.ICC
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/svn/terra/!svn/ver/232/trunk/3D-Terra/src/arch/make.ICC
+END
+make.ICCnoopt
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/terra/!svn/ver/219/trunk/3D-Terra/src/arch/make.ICCnoopt
+END
+make.IMPI
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/terra/!svn/ver/215/trunk/3D-Terra/src/arch/make.IMPI
+END
+make.TethysICC
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/terra/!svn/ver/212/trunk/3D-Terra/src/arch/make.TethysICC
+END
+make.ALTIX
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/svn/terra/!svn/ver/212/trunk/3D-Terra/src/arch/make.ALTIX
+END
+make.GFORTRAN
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/terra/!svn/ver/217/trunk/3D-Terra/src/arch/make.GFORTRAN
+END

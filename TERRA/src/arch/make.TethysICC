@@ -1,0 +1,39 @@
+# -----------------------------------------------------------------------------
+#    Parameters for compilation with INTEL's compiler suite on Tethys
+# -----------------------------------------------------------------------------
+
+# Turn off vectorisation and auto-parallelisation reports and warnings
+QUIET = -vec-report0 -par-report0 -w
+
+# Options for optimisation
+OPT = -O3 -parallel
+
+# Settings for using OpenMPI
+MPI_INC_PATH = /usr/lib/openmpi/include
+MPI_LIB_PATH = /usr/lib/openmpi/lib
+MPI_LIBS     = -pthread -lmpi_f77 -lmpi -lopen-rte -lopen-pal -ldl -Wl,--export-dynamic -lnsl -lutil -lm -ldl
+
+# Settings for using Intel MPI
+# MPI_INC_PATH = /opt/intel/impi/3.2/include64
+# MPI_LIB_PATH = /opt/intel/impi/3.2/lib64
+# MPI_LIBS     = -Xlinker --enable-new-dtags -Xlinker -rpath -Xlinker $libdir -Xlinker -rpath -Xlinker /opt/intel/mpi-rt/3.2 -lmpi -lmpiif -lmpigi -lrt -lpthread -ldl
+
+CC      = icc
+FC      = ifort
+LK      = ifort
+FFLAGS  = -fpp -r8 -align dcommons $(OPT) -I$(MPI_INC_PATH) $(QUIET)\
+          $(VTKW_MACRO)
+LFLAGS  = -L$(MPI_LIB_PATH)
+LIBS    = $(MPI_LIBS) -openmp $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -strict-ansi $(OPT) -I$(MPI_INC_PATH) $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

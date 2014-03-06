@@ -1,0 +1,26 @@
+# -----------------------------------------------------------------------------
+# Parameters for compilation with INTEL's compiler and MPI suite under LINUX
+# -----------------------------------------------------------------------------
+#
+# before compilation please do:
+# source /opt/intel/impi/3.1/bin/mpivars.sh
+#
+
+CC      = mpiicc
+FC      = mpiifort
+LK      = mpiifort
+FFLAGS  = -fpp -r8 -align dcommons -O3 $(VTKW_MACRO)
+LFLAGS  = 
+LIBS    = $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -strict-ansi -O3 $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

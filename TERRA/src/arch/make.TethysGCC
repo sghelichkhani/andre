@@ -1,0 +1,27 @@
+# -----------------------------------------------------------------------------
+#    Parameters for compilation with GCC and OpenMPI on Tethys
+# -----------------------------------------------------------------------------
+
+# Starting with GCC 4.4.2 we can simply use -cpp to enable the c-preprocessor
+# for Fortran source code
+DO_CPP = -x f77-cpp-input
+# DO_CPP = -cpp
+
+CC      = mpicc.openmpi
+FC      = mpif77.openmpi
+LK      = mpif77.openmpi
+FFLAGS  = $(DO_CPP) -fdefault-real-8 -w -g $(VTKW_MACRO)
+LFLAGS  =
+LIBS    = $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -Wall -pedantic -O3 $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

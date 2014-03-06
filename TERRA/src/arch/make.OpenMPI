@@ -1,0 +1,31 @@
+# -----------------------------------------------------------------------------
+# Parameters for compilation with INTEL compiler suite and OpenMPI under LINUX
+# -----------------------------------------------------------------------------
+
+# we want to use ifort:
+export OMPI_F77 = ifort
+export OMPI_FC  = ifort
+export OMPI_CC  = icc
+
+# commented stuff might be required for COREDUMP machines
+
+CC      = mpicc.openmpi
+FC      = mpif90.openmpi
+LK      = mpif90.openmpi
+FFLAGS  = -fpp -r8 -align dcommons -O3 $(VTKW_MACRO)
+# FFLAGS  = -r8 -align dcommons -O3 -xW -axW -mcmodel=large -shared-intel
+LFLAGS  = 
+# LFLAGS  = -mcmodel=large -shared-intel
+LIBS    = $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -strict-ansi -O3 -I/usr/include/openmpi $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

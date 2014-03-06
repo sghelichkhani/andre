@@ -1,0 +1,409 @@
+*dk plateinit
+	subroutine plateinit(time,urtn,time_stage,begstage,nplate_tot)
+	implicit none
+!	This routine initializes the use of plate motion histories
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+
+	integer i,j,k, iplate, ind, begstage, kk, allpl, numb
+	integer tmp, nrstages, nplate_tot, nplate_sta
+	
+	real tmp2, plate_scale, fac, scale, time
+	real time_stage(0:pl_size,2), urtn_tmp(3)
+	real urtn(3,pl_size,pl_size)
+
+	character char2*3
+	
+	time_stage=0.0
+
+	write(char2,'(I3.3)') mt
+	open(118,file='../platemaps_mt'//char2//'/euler_poles.dat',
+     &		status='old')
+
+	read(118,*) nrstages, tmp, tmp, tmp2, nplate_tot
+
+	if((nplate_tot*(buff+1)>pl_size).or.(nrstages>pl_size)) then
+		write(*,*) 'pl_size too small'
+		stop
+	endif
+
+!	cm/yr -> m/sec
+	fac=0.31688*1.0e-9
+	allpl=0
+	numb=floor(real(nrstages)/real(plateskp+1))
+	if(numb==0.and.mynum==0) then
+		write(6,*) "Problems with number of plate stages and 'plateskp'!"
+		stop
+	endif
+	do i=1,numb
+		time_stage(i,1)=time_stage(i-1,1)
+		do kk=1,plateskp+1
+			read(118,*) tmp, tmp2, nplate_sta
+			time_stage(i,1) = time_stage(i,1)+tmp2
+			allpl=allpl+1
+			! store the actual stage number in the second part of time_stage
+			if(kk==1) time_stage(i,2)=real(allpl)
+			do j=1,nplate_sta
+				read(118,*) iplate, urtn_tmp(1),urtn_tmp(2),urtn_tmp(3)
+			
+				if(kk==1) then
+					urtn(1,iplate,i) = urtn_tmp(1)*fac/velfac
+					urtn(2,iplate,i) = urtn_tmp(2)*fac/velfac
+					urtn(3,iplate,i) = urtn_tmp(3)*fac/velfac				
+					!	creating artificial 'plates' due to
+					!	plate boundary smoothing
+					do k=1,buff
+						scale=1.0-(2.0*k)/(2.0*buff+1.0)
+						ind=iplate+k*nplate_tot
+						urtn(1,ind,i) = urtn(1,iplate,i)*scale
+						urtn(2,ind,i) = urtn(2,iplate,i)*scale
+						urtn(3,ind,i) = urtn(3,iplate,i)*scale
+					enddo
+				endif
+			enddo
+		enddo
+		if((tbeg-time/velfac)>time_stage(i,1).and.begstage<numb) begstage=i+1
+	enddo
+	time_stage(:,1)=time_stage(:,1)*velfac
+	close(118)
+
+	end subroutine
+
+
+*dk platestage
+	subroutine platestage(map,stage,nplate_tot)
+	implicit none
+!	This routine initializes the plate map array map that assigns
+!	a plate number to each surface node.
+!	If the buffer zone given by 'buff' is greater 0, then 'buff' additional
+!	plates will be created at the boundary of each plate, which will
+!	be assigned slower plate velocities as given in urtn.
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+	
+	integer ib, i1, i2, id, idn
+	integer stage, nplate_tot
+	integer map(0:nt,nt+1,nd)
+	
+	real npladd
+	real orshl(nr+1), map_tmp(mt+1,mt+1,10)
+	real v(mt+1,mt+1,10), w(0:nt,nt+1,nd)
+
+	character char1*3, char2*3
+	character*8 otitl(4,4)
+
+! output files start with stage=0
+	write(char1,'(I3.3)') stage-1
+	write(char2,'(I3.3)') mt
+
+	map=0
+	map_tmp=0.0
+	call nulvec(v,(mt+1)**2*10)
+
+	open(77,file='../platemaps_mt'//char2//'/cstage.mt0'//trim(char2)//'.'
+     &		//trim(char1),status='unknown')
+	call vecin2(v,otitl,orshl,77,1)
+
+	close(77)
+
+	do ib=1,buff
+
+!	Initialize the temporary array
+		map_tmp = v
+		npladd=real((buff+1.0-ib)*nplate_tot)
+
+!	First treat the points inside all diamonds
+		do id=1,10
+			do i2=2,mt
+				do i1=2,mt
+
+					if(v(i1,i2,id)<=nplate_tot) then
+						if((v(i1,i2,id).ne.v(i1-1,i2,id)).or.
+     &              (v(i1,i2,id).ne.v(i1+1,i2  ,id)) .or.
+     &              (v(i1,i2,id).ne.v(i1  ,i2-1,id)) .or.
+     &              (v(i1,i2,id).ne.v(i1  ,i2+1,id)) .or.
+     &              (v(i1,i2,id).ne.v(i1-1,i2+1,id)) .or.
+     &              (v(i1,i2,id).ne.v(i1+1,i2-1,id))) then
+
+							map_tmp(i1,i2,id) = v(i1,i2,id) + npladd
+
+						endif
+					endif
+				enddo
+			enddo
+		enddo
+
+!	Then treat north and south pole
+		if(v(1,1,1)<=nplate_tot) then
+			if((v(1,1,1) .ne. v(2,1,1)) .or.
+     &      (v(1,1,1) .ne. v(2,1,2)) .or.
+     &      (v(1,1,1) .ne. v(2,1,3)) .or.
+     &      (v(1,1,1) .ne. v(2,1,4)) .or.
+     &      (v(1,1,1) .ne. v(2,1,5))) then
+
+				map_tmp(1,1,1:5) = v(1,1,1:5) + npladd
+
+			endif
+		endif
+
+		if(v(1,1,6)<=nplate_tot) then
+			if((v(1,1,6) .ne. v(2,1,6)) .or.
+     &      (v(1,1,6) .ne. v(2,1,7)) .or.
+     &      (v(1,1,6) .ne. v(2,1,8)) .or.
+     &      (v(1,1,6) .ne. v(2,1,9)) .or.
+     &      (v(1,1,6) .ne. v(2,1,10))) then
+
+				map_tmp(1,1,6:10) = v(1,1,6:10) + npladd
+
+			endif
+		endif
+
+!	Treat pentagonal nodes
+		do id=1,10
+
+			i1=mt+1
+			i2=1
+			idn = id-1
+
+			if(id==1) idn=5
+			if(id==6) idn=10
+
+			if(v(i1,i2,id)<=nplate_tot) then
+				if((v(i1,i2,id) .ne. v(i1-1,i2  ,id )) .or.
+     &			(v(i1,i2,id) .ne. v(i1-1,i2+1,id )) .or.
+     &			(v(i1,i2,id) .ne. v(i1  ,i2+1,id )) .or.
+     &			(v(i1,i2,id) .ne. v(2   ,mt+1,idn)) .or.
+     &			(v(i1,i2,id) .ne. v(2   ,mt  ,idn))) then
+
+					map_tmp(i1,i2,id) = v(i1,i2,id) + npladd 
+					!	We also have to change the corresponding node on
+					!	diamond idn
+					map_tmp(i2,i1,idn) = v(i2,i1,idn) + npladd 
+
+				endif
+			endif
+		enddo
+
+!	Treat upper edges of northern diamonds and
+!	lower edges of southern diamonds
+		do id=1,10
+
+			i2=1
+			if(id==1) idn=5
+			if(id>=2.and.id<=5) idn = id-1
+			if(id==6) idn=10
+			if(id>=7.and.id<=10)idn = id-1
+
+			do i1=2,mt
+
+				if(v(i1,i2,id)<=nplate_tot) then
+					if((v(i1,i2,id) .ne. v(i1-1,i2  ,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1-1,i2+1,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1  ,i2+1,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1+1,i2  ,id )) .or.
+     &				(v(i1,i2,id) .ne. v(2   ,i1  ,idn)) .or.
+     &				(v(i1,i2,id) .ne. v(2   ,i1-1,idn))) then
+	
+						map_tmp(i1,i2,id) = v(i1,i2,id) + npladd
+						!	We also have to change the corresponding node on
+						!	diamond idn
+						map_tmp(i2,i1,idn) = v(i2,i1,idn) + npladd
+
+					endif
+				endif
+			enddo
+		enddo
+
+!	Treat lower right edges of northern diamonds and
+!	upper left edges of southern diamonds
+		do id=1,5
+
+			i2=mt+1
+			idn = id+5
+
+			do i1=2,mt
+
+				if(v(i1,i2,id)<=nplate_tot) then
+					if((v(i1,i2,id) .ne. v(i1-1,i2       ,id )) .or.
+     &				(v(i1,i2,id) .ne. v(mt  ,mt+2-i1+1,idn)) .or.
+     &				(v(i1,i2,id) .ne. v(mt  ,mt+2-i1  ,idn)) .or.
+     &				(v(i1,i2,id) .ne. v(i1+1,i2       ,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1+1,i2-1     ,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1  ,i2-1     ,id ))) then
+
+						map_tmp(i1,i2,id) = v(i1,i2,id) + npladd
+						!	We also have to change the corresponding node on
+						!	diamond idn
+						map_tmp(i2,mt+2-i1,idn) = v(i2,mt+2-i1,idn) +npladd
+
+					endif
+				endif
+			enddo
+		enddo
+
+!	Treat lower left edge of northern diamonds and
+!	upper right edge of southern diamonds
+		do id=1,5
+
+			i1=mt+1
+			if(id==1) idn=10
+			if(id>=2.and.id<=5) idn=id+4
+
+			do i2=2,mt
+
+				if(v(i1,i2,id)<=nplate_tot) then
+					if((v(i1,i2,id) .ne. v(i1       ,i2-1,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1-1     ,i2  ,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1-1     ,i2+1,id )) .or.
+     &				(v(i1,i2,id) .ne. v(i1       ,i2+1,id )) .or.
+     &				(v(i1,i2,id) .ne. v(mt+2-i2  ,mt  ,idn)) .or.
+     &				(v(i1,i2,id) .ne. v(mt+2-i2+1,mt  ,idn))) then
+
+						map_tmp(i1,i2,id) = v(i1,i2,id) + npladd
+						!	We also have to change the corresponding node on
+						!	diamond idn
+						map_tmp(mt+2-i2,i1,idn) = v(mt+2-i2,i1,idn) +npladd
+
+					endif
+				endif
+			enddo
+		enddo
+
+!	Copy temporary result to v before looping over all points again 
+		v = map_tmp
+
+	enddo
+
+	call subarray(v,w,0,10,nd,mt,nt,1)
+
+	do id=1,nd
+		do i2=1,nt+1
+			do i1=0,nt
+				map(i1,i2,id) = int(w(i1,i2,id))
+			enddo
+		enddo
+	enddo
+
+	end subroutine
+    
+      
+*dk platevelreplace
+	subroutine platevelreplace(v,urot,xn,map)
+	implicit none
+!	This routine loads the velocity field into the surface layer
+!	of array v specified by the surface plate rotations vrtn.
+ 
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+
+	integer ii,i,j,k,ind
+	integer map((nt+1)**2*nd)
+	real v((nt+1)**2*nd,3,*)
+	real xn((nt+1)**2*nd,3)
+	real urot(3,pl_size)
+
+!	Generate the surface velocity field from the plate rotations vrtn.
+!	cross product of vrtn and xn
+	do ii=1,(nt+1)**2*nd
+
+		!i=mod(ii-1,nt+1)
+		!j=mod(ceiling(real(ii/(nt+1.0)))-1,nt+1)+1
+		!k=ceiling(real(ii/(nt+1.0)**2.0))
+		ind = map(ii)
+
+		v(ii,1,1) = urot(2,ind)*xn(ii,3) - urot(3,ind)*xn(ii,2)
+		v(ii,2,1) = urot(3,ind)*xn(ii,1) - urot(1,ind)*xn(ii,3)
+		v(ii,3,1) = urot(1,ind)*xn(ii,2) - urot(2,ind)*xn(ii,1)
+	enddo
+
+	end subroutine
+
+
+*dk platemap_out
+	subroutine platemap_out(map,stage,u,rot,nplate_tot)
+	implicit none
+!	This routine writes the surface velocity (or plate ids)
+!	and the Euler rotation poles to file
+
+	include 'size.h'
+	include 'pcom.h'
+	include 'para.h'
+
+	integer ii, ind
+	integer map((nt+1)**2*nd)
+	integer stage, nplate_tot
+
+	real rmap((nt+1)**2*nd)
+	real rmap_tot((mt+1)**2*10)
+	real rmap_samp((mt/2+1)**2*10)
+	real rmap_samp2((mt/4+1)**2*10)
+	real rmap_samp3((mt/8+1)**2*10)
+	real u((nt+1)**2*nd,3,nr+1), fac
+	real rot(3,pl_size), rot2(3,pl_size)
+		
+	real s2_samp(0:nt/2,nt/2+1,nd,1,nr/2+1)
+	real u_samp(0:nt/2,nt/2+1,nd,3,nr/2+1)
+
+!	cm/yr -> m/sec
+	fac=0.31688*1.0e-9
+	
+	do ii=1,(nt+1)**2*nd
+		!rmap(ii) = real(map(ii))
+		rmap(ii) = sqrt(u(ii,1,1)**2+u(ii,2,1)**2+u(ii,3,1)**2)
+	enddo
+	rmap=rmap/fac
+	rot2=rot*velfac/fac
+
+	call pcomtozeronew(rmap_tot,rmap,mt,nt,0)
+
+! sample the velocity field to 2(3) levels coarser than the actual grid
+! for matlab plots
+	call samp_new(rmap_samp,rmap_tot,1,mt,10)
+	call samp_new(rmap_samp2,rmap_samp,1,mt/2,10)
+	call samp_new(rmap_samp3,rmap_samp2,1,mt/4,10)
+	
+	if(mynum==0) then
+		write(311,*) stage-1
+		write(312,*) stage-1
+		do ii=1,(mt/8+1)**2*10
+			write(311,*) rmap_samp3(ii)
+		enddo
+		do ii=1,nplate_tot
+			write(312,*) rot2(1,ii), rot2(2,ii), rot2(3,ii)
+		enddo
+	endif
+	
+	end subroutine
+
+	
+*dk samp_new
+	subroutine samp_new(vc,vf,nj,nt,nd)
+	implicit none
+!	This routine loads into array vc a sampled version of array vf
+!	one grid level coarser than that of vf.
+
+	integer nj, nt, nd
+	integer j, id, i2, j2, i1
+		
+ 	real vc(0:nt/2,nt/2+1,nd,nj)
+	real vf(0:nt,  nt+1,  nd,nj)
+
+	do j=1,nj
+		do id=1,nd
+			do i2=1,nt/2+1
+				j2 = i2 + i2 -1
+				do i1=0,nt/2
+					vc(i1,i2,id,j) = vf(i1+i1,j2,id,j)
+				enddo
+			enddo
+		enddo
+	enddo
+
+	end subroutine
+
+

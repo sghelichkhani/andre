@@ -1,0 +1,29 @@
+# -----------------------------------------------------------------------------
+#    Parameters for compilation with INTEL's compiler suite under LINUX
+# -----------------------------------------------------------------------------
+
+export OMPI_F77 = ifort
+export OMPI_FC  = ifort
+export OMPI_CC  = icc
+
+FC_NOOPT = -O0 -no-vec
+CC_NOOPT = -O0 -no-vec
+
+CC      = mpicc.openmpi
+FC      = mpif77.openmpi
+LK      = mpif77.openmpi
+FFLAGS  = -fpp -r8 -align dcommons $(FC_NOOPT) $(VTKW_MACRO)
+LFLAGS  =
+LIBS    = $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -strict-ansi $(CC_NOOPT) $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------

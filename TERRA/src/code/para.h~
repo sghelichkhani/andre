@@ -1,0 +1,59 @@
+! ##### TERRA simulation parameters #####
+
+	integer, parameter:: nadj=15			! number of adjoint iterations (0: just forward simulation)
+	integer, parameter:: init=0				! type of initialization (-1: restart, 0: tomography, 2: c-file, 17: cube 1-50: see prev. version)
+	
+	integer, parameter:: layskp_appl=7		! number of skipped layers when applying the residual (7: 150km, 10: 200km)
+	integer, parameter:: layskp_calc=7		! number of skipped layers when calculating the residual (7: 150km, 10: 200km)
+	integer, parameter:: shearcut=10		! cut layer of shear heating calculation (1: no cut 10: 200km, 15: 300km)
+	integer, parameter:: lay_damp=129		! layer, which damping is applied up to (1: no damping, 32: 700km, 129: all)
+			
+	real, parameter:: tbeg=40.00e+06		! starting point in the past (years)
+	real, parameter:: tsim=40.00e+06		! simulation time	(years)
+	real, parameter:: velfac=1.21			! velocity scaling factor
+
+	integer, parameter:: ibc=6				! boundary condition (1: free slip, 6: plates)
+	integer, parameter:: buff=2				! number of plate buffer zones
+	integer, parameter:: plateskp=3			! how many plate stages should be skipped? (use every 'plateskp+1' stages)
+
+	integer, parameter:: itmax=500000		! maximum number of time steps
+	integer, parameter:: npres=2			! number of pressure iterations in forward iteration
+	integer, parameter:: npres_adj=1		! number of pressure iterations in backward iteration
+		
+	integer, parameter:: nout0=21			! number of output files incl. first/final step (c and/or vtkw)
+											! (equal time intervals)
+	
+! (velfac: 1.21 (normal))
+
+
+!       411  casenum  three-digit case number used in naming i/o files.
+!         1  ird      radial discretization index--values between 1 and 5
+! 3.480e+06  rmin     inner radius of spherical shell
+! 6.370e+06  rmax     outer radius of spherical shell
+!        20  itlimit  maximum number of multigrid iterations
+! 1.000e-02  convtol  convergence tolerance for multigrid solver
+!        00  idump0   dump number for restart case.
+! 1.000e-10  step0    initial time step fraction of advection limit
+! 1.000e-14  stepmin  minimum time step fraction of advection limit
+! 3.500e-01  stepmax  maximum time step fraction of advection limit
+!        22  ieos     index specifying EOS type--1 for Boussinesq case
+! 4.500e+03  rho0     reference density
+! 1.000e+21  visc     dynamic viscosity
+! 1.000e+01  grav     gravitational acceleration
+! 2.500e-05  texpn    volume coefficient of thermal expansion
+! 3.000e+00  tcond    thermal conductivity
+! 1.000e+03  sheat    specific heat at constant volume
+! 6.000e-12  hgen     specific radiogenic heat production rate
+! 3.000e+02  tb(1)    temperature at outer shell boundary
+! 4.200e+03  tb(2)    temperature on inner shell boundary
+! 0.000e+06  cl410    Clapeyron slope (dp/dT) for 410 km transition region
+!-0.000e+06  cl660    Clapeyron slope (dp/dT) for 660 km transition region
+! 1.000e+03  vscmax   maximum value for viscosity variation
+!-1.000e-02  rvscscl  radial scaling for viscosity activation energy
+! 0.000e-00  tvscscl  tangential scaling for viscosity activation energy
+! 0.000e+00  pwrlawn  power-law exponent (zero turns off this feature)
+! 3.000e-15  pwrlawsr transition strain rate for power-law rheology
+! 0.000e+08  yldstrs  plastic yield stress (zero turns off this feature)
+! 0.000e+03  tmpmlt   reference asthenospheric melting temperature
+!   both  exptype  sets type data export with fldsout (c-file or vtkw)
+

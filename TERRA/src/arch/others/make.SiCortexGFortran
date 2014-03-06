@@ -1,0 +1,11 @@
+# -----------------------------------------------------------------------------
+#    Parameters for compilation on SciCortex systems with GFORTRAN
+# -----------------------------------------------------------------------------
+
+FC      = gfortran
+LK      = gfortran
+FFLAGS  = -I/usr/include -fdefault-real-8 -w
+LFLAGS  = 
+LIBS    = -lscmpi
+
+# -----------------------------------------------------------------------------

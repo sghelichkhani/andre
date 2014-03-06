@@ -1,0 +1,30 @@
+# -----------------------------------------------------------------------------
+#         Parameters for compilation with GFORTRAN/GCC under Linux
+# -----------------------------------------------------------------------------
+
+# Starting with GCC 4.4 we can simply use -cpp to enable the c-preprocessor
+# for Fortran source code
+# Note: We then can also replace -w by -Wno-align-commons (to suppress the
+#       warnings on padding!)
+DO_CPP = -x f77-cpp-input
+# DO_CPP = -cpp
+
+CC      = gcc
+FC      = gfortran
+LK      = gfortran
+FFLAGS  = $(DO_CPP) -I/usr/include/openmpi -fdefault-real-8 -w $(VTKW_MACRO)
+LFLAGS  = -L/usr/lib/openmpi/lib
+LIBS    = -lmpi_f77 $(VTKW_LIBS)
+
+ifeq "$(USE_VTKW)" "yes"
+  VTKW_MACRO  = -DUSE_VTKW
+  VTKW_CFLAGS = -std=c99 -Wall -pedantic -O3 -I/usr/include/openmpi\
+                $(VTKW_MACRO)
+  VTKW_LIBS   = -lz
+else
+  VTKW_MACRO  =
+  VTKW_CFLAGS =
+  VTKW_LIBS   =
+endif
+
+# -----------------------------------------------------------------------------
